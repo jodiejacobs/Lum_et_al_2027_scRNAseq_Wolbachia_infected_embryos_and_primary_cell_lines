@@ -1,2 +1,1 @@
-# Lum et al 2027 scRNAseq of Wolbachia-infected Drosophila embryos and primary cell lines
-PIPseq 3'scRNAseq of Wolbachia infected Drosophila embryos and primary cell lines 
+# Methods for the single cell analysis of differential expression in _Wolbachia_  wMel infected _Drosophila melanogaster_ cell lines.
