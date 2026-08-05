@@ -17,7 +17,7 @@ filter_script: "snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata_no_
 cell_cycle_script: "snakemake_scripts/analysis/cyclum_cell_cycle.py"
 cyclum_analysis_script: "snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"
 transcripts_to_genes: "reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
-project_cell_cycle_script: "scripts/method_comparison/integrate_by_ref.py"
+project_cell_cycle_script: "snakemake_scripts/method_comparison/integrate_by_ref.py"
 
 # Compute resources for cellranger 
 cellranger_threads: 16
@@ -65,7 +65,7 @@ min_blast_reads: 100
 blast_db: "blast_db/16S_ribosomal_RNA_plus_wolbachia"
 
 # Method comparison scripts
-validate_pipseq_script: "scripts/method_comparison/validate_pipseq_v2.py"
+validate_pipseq_script: "snakemake_scripts/method_comparison/validate_pipseq_v2.py"
 validate_threads: 16
 validate_partition: "medium"
 validate_mem: 64000
@@ -90,13 +90,13 @@ integrate_time: "8:00:00"
 # qc_mem: 64000
 # qc_time: "2:00:00"
 
-cellcycle_script: "scripts/method_comparison/scanpy_cellcycle_analysis_v2.py"
+cellcycle_script: "snakemake_scripts/method_comparison/scanpy_cellcycle_analysis_v2.py"
 cellcycle_threads: 4
 cellcycle_partition: "medium"
 cellcycle_mem: 32000
 cellcycle_time: "2:00:00"
 
-cluster_marker_pathway_script: "scripts/method_comparison/cluster_marker_pathway_analysis.py"
+cluster_marker_pathway_script: "snakemake_scripts/method_comparison/cluster_marker_pathway_analysis.py"
 # Optional overrides:
 # cluster_marker_de_method: "wilcoxon"
 # cluster_marker_top_n: 100
@@ -105,7 +105,7 @@ cluster_marker_pathway_script: "scripts/method_comparison/cluster_marker_pathway
 # cluster_marker_time: "8:00:00"
 # cluster_marker_partition: "medium"
 
-sceptic_script: "scripts/method_comparison/run_sceptic.py"
+sceptic_script: "snakemake_scripts/method_comparison/run_sceptic.py"
 sceptic_method: "xgboost"
 sceptic_n_bins: 10
 sceptic_threads: 8
