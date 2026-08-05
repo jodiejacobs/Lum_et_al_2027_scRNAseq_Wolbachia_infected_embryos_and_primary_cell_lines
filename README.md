@@ -1,2 +1,2 @@
-# Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines
+# Lum et_al 2027 scRNAseq of Wolbachia-infected Drosophila embryos and primary cell lines
 PIPseq 3'scRNAseq of Wolbachia infected Drosophila embryos and primary cell lines 
