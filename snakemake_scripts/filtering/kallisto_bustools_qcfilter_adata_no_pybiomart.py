@@ -171,13 +171,18 @@ def identify_doublets(adata, fig_dir):
     print(f"Using {n_components} principal components (max possible: {max_components})")
     
     scrub = scr.Scrublet(adata.X, expected_doublet_rate=0.1)
-    doublet_scores, predicted_doublets = scrub.scrub_doublets(
+    doublet_scores, _ = scrub.scrub_doublets(
         min_counts=2, min_cells=3,
         min_gene_variability_pctl=85,
         n_prin_comps=n_components,
     )
-    scrub.call_doublets()
-    
+
+    # Manually set doublet-call threshold (default auto-detection was unreliable
+    # on this data) — recalculates calls from the existing scores, no re-simulation
+    doublet_threshold = 0.4
+    predicted_doublets = scrub.call_doublets(threshold=doublet_threshold)
+    print(f"Doublet threshold set to {doublet_threshold}")
+
     # Histogram only — scrublet UMAP removed (slow, not used downstream)
     print("Plotting scrublet histogram")
     scrub.plot_histogram()
