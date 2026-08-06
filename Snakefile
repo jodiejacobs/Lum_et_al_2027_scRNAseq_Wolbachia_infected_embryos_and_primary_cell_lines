@@ -21,6 +21,20 @@ samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" els
 # Change index format to use hyphen between condition and replicate
 samples_df.index = [(row[0] + "-" + str(row[3]) + "_" + row[2]) for _, row in samples_df.iterrows()]
 
+# Fail fast with a clear message if two rows collapse to the same sample_id
+# (this happens when condition + replicate + seq_platform is duplicated in
+# samples.csv, e.g. two rows with the same condition/replicate/platform but
+# different genome). A duplicated index turns samples_df.loc[sample_id] into
+# a DataFrame instead of a Series everywhere below, which surfaces as
+# confusing errors like "unhashable type: 'Series'".
+_dupe_ids = sorted(set(samples_df.index[samples_df.index.duplicated(keep=False)]))
+if _dupe_ids:
+    raise ValueError(
+        f"Duplicate sample_id(s) in {config['samples_file']}: {_dupe_ids}. "
+        "Each condition/replicate/seq_platform combination must be unique — "
+        "check for duplicate rows or a reused replicate number for that condition/platform."
+    )
+
 # Get actual sample IDs that exist
 SAMPLE_IDS = samples_df.index.tolist()
 
@@ -168,8 +182,8 @@ rule map_pipseq:
         sample_id = "{sample_id}",
         outdir = "results/pipseq/{sample_id}",
         genome = lambda wildcards: get_genome(wildcards.sample_id),
-        kallisto_index = lambda wildcards: config[get_genome(wildcards.sample_id)],
-        transcripts_to_genes = config["transcripts_to_genes"]
+        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
+        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
     wildcard_constraints:
         sample_id = ".*_pipseq"  # Only match samples ending with _pipseq
     log:
@@ -220,8 +234,8 @@ rule map_10x:
         sample_id = "{sample_id}",
         outdir = "results/10x/{sample_id}",
         genome = lambda wildcards: get_genome(wildcards.sample_id),
-        kallisto_index = lambda wildcards: config[get_genome(wildcards.sample_id)],
-        transcripts_to_genes = config["transcripts_to_genes"]
+        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
+        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
     wildcard_constraints:
         sample_id = ".*_10x"  # Only match samples ending with _10x
     log:

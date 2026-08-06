@@ -25,7 +25,11 @@ combine_script: "snakemake_scripts/analysis/integrate_h5ad_by_condition.py"
 filter_script: "snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata_no_pybiomart.py" # Changes to remove biomart dependancy on 3/25/26
 cell_cycle_script: "snakemake_scripts/analysis/cyclum_cell_cycle.py"
 cyclum_analysis_script: "snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"
-transcripts_to_genes: "reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts_to_genes.txt"
+# Canonical t2g used by downstream steps that run on the fully-integrated,
+# multi-species h5ad (cluster_marker_pathway, nmf_annotate_programs). Per-sample
+# kallisto mapping (map_pipseq/map_10x) instead pulls index.idx/t2g.txt from
+# each sample's own genome directory above.
+transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wMel_combined_16S/t2g.txt"
 project_cell_cycle_script: "snakemake_scripts/method_comparison/integrate_by_ref.py"
 
 # Compute resources for cellranger 
