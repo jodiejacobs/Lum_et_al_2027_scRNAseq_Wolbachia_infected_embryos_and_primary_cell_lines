@@ -9,10 +9,19 @@ cyclum_env: '/private/groups/russelllab/jodie/miniforge3/envs/cyclum'
 kallisto_env: "/private/groups/russelllab/jodie/miniforge3/envs/kallisto_bustools"
 sra_tools_env: "/private/groups/russelllab/jodie/miniforge3/envs/sra-tools"
 
+# Path to kallisto_index/genome:
+# Path to genome reference files, keyed by the genome name used in column 2 of samples.csv:
+Dmel_wMel: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wMel_combined_16S"
+Dmel_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wRi_Riv84_combined_16S"
+Dmel_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wWil_combined_16S"
+Dsim_wMel: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wMel_combined_16S"
+Dsim_wRi_M23: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wRi_M23_combined_16S"
+Dsim_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wRi_Riv84_combined_16S"
+Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_willistoni_wWil_combined_16S"
+
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
-combine_script: "snakemake_scripts/analysis/integrate_h5ad_by_condition.py" 
-kallisto_index: "reference/KB_Drosophila_melanogaster_wMel_combined_16S/transcripts.idx" 
+combine_script: "snakemake_scripts/analysis/integrate_h5ad_by_condition.py"
 filter_script: "snakemake_scripts/filtering/kallisto_bustools_qcfilter_adata_no_pybiomart.py" # Changes to remove biomart dependancy on 3/25/26
 cell_cycle_script: "snakemake_scripts/analysis/cyclum_cell_cycle.py"
 cyclum_analysis_script: "snakemake_scripts/analysis/cyclum_cellcycle_analysis.py"

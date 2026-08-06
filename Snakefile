@@ -14,27 +14,28 @@ SRA_TOOLS_ENV = config["sra_tools_env"]
 
 
 # Load samples information
+# Columns: 0=condition, 1=genome, 2=seq_platform, 3=replicate, 4=R1, 5=R2
 samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
 samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
 
 # Change index format to use hyphen between condition and replicate
-samples_df.index = [(row[0] + "-" + str(row[2]) + "_" + row[1]) for _, row in samples_df.iterrows()]
+samples_df.index = [(row[0] + "-" + str(row[3]) + "_" + row[2]) for _, row in samples_df.iterrows()]
 
 # Get actual sample IDs that exist
 SAMPLE_IDS = samples_df.index.tolist()
 
 CONDITIONS = samples_df[0].unique().tolist()
-REPLICATES = samples_df[2].unique().tolist() 
-SEQUENCING_PLATFORMS = samples_df[1].unique().tolist()
+REPLICATES = samples_df[3].unique().tolist()
+SEQUENCING_PLATFORMS = samples_df[2].unique().tolist()
 
 # Create a dictionary to track which condition-seq_platform combinations exist
 # and what replicates are available for each
 CONDITION_PLATFORM_REPS = {}
 for sample_id in SAMPLE_IDS:
     condition = samples_df.loc[sample_id][0]
-    seq_platform = samples_df.loc[sample_id][1]
-    replicate = samples_df.loc[sample_id][2]
-    
+    seq_platform = samples_df.loc[sample_id][2]
+    replicate = samples_df.loc[sample_id][3]
+
     key = (condition, seq_platform)
     if key not in CONDITION_PLATFORM_REPS:
         CONDITION_PLATFORM_REPS[key] = []
@@ -64,9 +65,15 @@ print(f"Condition-Platform combinations: {CONDITION_PLATFORM_COMBOS}")
 def get_fastq_files(sample_id):
     """Get R1 and R2 fastq files for a sample."""
     sample_info = samples_df.loc[sample_id]
-    r1_path = sample_info[3]  # R1 path is in column 3 (0-indexed)
-    r2_path = sample_info[4]  # R2 path is in column 4 (0-indexed)
+    r1_path = sample_info[4]  # R1 path is in column 4 (0-indexed)
+    r2_path = sample_info[5]  # R2 path is in column 5 (0-indexed)
     return r1_path, r2_path
+
+# Helper function to get the reference genome name for a sample (looked up in config.yaml)
+def get_genome(sample_id):
+    """Get the genome name for a sample; used as a key into config.yaml for the kallisto index path."""
+    sample_info = samples_df.loc[sample_id]
+    return sample_info[1]  # Genome is in column 1 (0-indexed)
 
 # Helper function to get replicates for a condition-seq_platform combo
 def get_replicates_for_combo(condition, seq_platform):
@@ -160,7 +167,8 @@ rule map_pipseq:
     params:
         sample_id = "{sample_id}",
         outdir = "results/pipseq/{sample_id}",
-        kallisto_index = config["kallisto_index"],
+        genome = lambda wildcards: get_genome(wildcards.sample_id),
+        kallisto_index = lambda wildcards: config[get_genome(wildcards.sample_id)],
         transcripts_to_genes = config["transcripts_to_genes"]
     wildcard_constraints:
         sample_id = ".*_pipseq"  # Only match samples ending with _pipseq
@@ -211,7 +219,8 @@ rule map_10x:
     params:
         sample_id = "{sample_id}",
         outdir = "results/10x/{sample_id}",
-        kallisto_index = config["kallisto_index"],
+        genome = lambda wildcards: get_genome(wildcards.sample_id),
+        kallisto_index = lambda wildcards: config[get_genome(wildcards.sample_id)],
         transcripts_to_genes = config["transcripts_to_genes"]
     wildcard_constraints:
         sample_id = ".*_10x"  # Only match samples ending with _10x
