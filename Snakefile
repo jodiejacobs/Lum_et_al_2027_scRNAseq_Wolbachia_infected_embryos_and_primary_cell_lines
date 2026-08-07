@@ -95,6 +95,26 @@ def get_replicates_for_combo(condition, seq_platform):
     key = (condition, seq_platform)
     return CONDITION_PLATFORM_REPS.get(key, [])
 
+# Helper functions to resolve the rRNA gene lists used for the Wolbachia titer
+# calculation, for any host species x Wolbachia strain combination -- looks
+# up genome_components[genome] (host, symbiont) in config.yaml, then that
+# host's / that strain's gene list path. Missing entries return None; the
+# filter script treats a missing/absent file as "skip titer for this sample"
+# rather than crashing, so new genome keys can be added incrementally.
+def get_host_rrna_genes(sample_id):
+    genome = get_genome(sample_id)
+    components = config.get("genome_components", {}).get(genome)
+    if not components:
+        return ""
+    return config.get("host_rrna_genes", {}).get(components["host"], "")
+
+def get_symbiont_rrna_genes(sample_id):
+    genome = get_genome(sample_id)
+    components = config.get("genome_components", {}).get(genome)
+    if not components:
+        return ""
+    return config.get("symbiont_rrna_genes", {}).get(components["symbiont"], "")
+
 # Main rule that defines the final output
 rule all:
     input:
@@ -279,7 +299,9 @@ rule filter_h5ad:
     output:
         filtered_h5ad = "results/filtered_h5ad/{sample_id}.h5ad"
     params:
-        script = config["filter_script"]
+        script = config["filter_script"],
+        host_rrna_genes = lambda wildcards: get_host_rrna_genes(wildcards.sample_id),
+        symbiont_rrna_genes = lambda wildcards: get_symbiont_rrna_genes(wildcards.sample_id)
     log:
         "logs/filter/{sample_id}.log"
     threads:
@@ -299,8 +321,10 @@ rule filter_h5ad:
 
         python {params.script} \
             --input {input} \
-            --output {output.filtered_h5ad} 
-        
+            --output {output.filtered_h5ad} \
+            --host_rrna_genes "{params.host_rrna_genes}" \
+            --symbiont_rrna_genes "{params.symbiont_rrna_genes}"
+
         echo "Compressing original h5ad file"
         gzip {input}
         echo "Filtering complete for {wildcards.sample_id}"

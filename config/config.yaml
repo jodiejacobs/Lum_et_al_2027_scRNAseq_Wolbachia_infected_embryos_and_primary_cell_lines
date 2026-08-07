@@ -20,6 +20,40 @@ Dmel_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wo
 #Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_willistoni_wWil_combined_16S"
 # Need to update the Dsim and Dwil references
 
+# rRNA gene lists for the Wolbachia titer calculation (calculate_wolbachia_titer
+# in the filter script), keyed by host species and by Wolbachia strain instead
+# of a single hardcoded Dmel+wMel gene list. Generate each file with:
+#   python3 snakemake_scripts/reference/find_rrna_genes.py <gtf> > <out>.txt
+# Host lists: run against the symbol-swapped GTF produced by
+# build_dmel_dsim_dwil_transcriptomes.sh (already wired up there, written to
+# each species' kallisto_ref/host_rrna_genes.txt).
+# Symbiont lists: run against each Wolbachia strain's own GTF once that
+# strain's annotation is in place -- placeholders below until then.
+host_rrna_genes:
+  Dmel: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/kallisto_ref/host_rrna_genes.txt"
+  Dsim: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_simulans/kallisto_ref/host_rrna_genes.txt"
+  Dwil: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/kallisto_ref/host_rrna_genes.txt"
+
+symbiont_rrna_genes:
+  wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/Wolbachia_genomes/wMel/rrna_genes.txt"
+  wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/Wolbachia_genomes/wRi_M23/rrna_genes.txt"
+  wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/Wolbachia_genomes/wRi_Riv84/rrna_genes.txt"
+  wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/Wolbachia_genomes/wWil/rrna_genes.txt"
+
+# Maps each genome key used in samples.csv (column 2) to its host species and
+# Wolbachia strain, so filter_h5ad can look up the right pair of rRNA gene
+# lists above for any species x strain combination without hardcoding
+# per-sample/per-genome logic in the Snakefile. Add a row here whenever a new
+# genome key is added above or to samples.csv.
+genome_components:
+  Dmel_wMel:      {host: Dmel, symbiont: wMel}
+  Dmel_wRi_Riv84: {host: Dmel, symbiont: wRi_Riv84}
+  Dmel_wWil:      {host: Dmel, symbiont: wWil}
+  Dsim_wMel:      {host: Dsim, symbiont: wMel}
+  Dsim_wRi_M23:   {host: Dsim, symbiont: wRi_M23}
+  Dsim_wRi_Riv84: {host: Dsim, symbiont: wRi_Riv84}
+  Dwil_wWil:      {host: Dwil, symbiont: wWil}
+
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
 combine_script: "snakemake_scripts/analysis/integrate_h5ad_by_condition.py"

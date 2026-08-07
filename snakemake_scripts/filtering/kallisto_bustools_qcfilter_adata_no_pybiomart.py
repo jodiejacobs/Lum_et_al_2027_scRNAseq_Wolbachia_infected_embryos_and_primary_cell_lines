@@ -41,6 +41,17 @@ parser.add_argument("--scrublet_max_cells", type=int, default=10000,
                     help="Max cells for Scrublet subsampling (default: 10000)")
 parser.add_argument("--n_pcs_scrublet",     type=int, default=20,
                     help="PCs for Scrublet (default: 20)")
+parser.add_argument("--host_rrna_genes", type=str, default=None,
+                    help="Text file, one host (Drosophila) rRNA gene id per "
+                         "line -- generate with "
+                         "snakemake_scripts/reference/find_rrna_genes.py "
+                         "against that sample's host GTF. If omitted, "
+                         "Wolbachia titer is not calculated.")
+parser.add_argument("--symbiont_rrna_genes", type=str, default=None,
+                    help="Text file, one Wolbachia rRNA gene id per line -- "
+                         "generate with find_rrna_genes.py against that "
+                         "sample's Wolbachia GTF. If omitted, Wolbachia "
+                         "titer is not calculated.")
 
 args   = parser.parse_args()
 input  = args.input
@@ -60,17 +71,24 @@ sc.settings.figdir   = fig_dir
 # Gene lists
 # ─────────────────────────────────────────────────────────────────────────────
 
-rRNA_genes = [
-    "GQX67_00940", "GQX67_00945", "GQX67_05945",
-    "FBgn0267496", "FBgn0267500", "FBgn0267503", "FBgn0085765",
-    "FBgn0267518", "FBgn0267524", "FBgn0267509", "FBgn0267499",
-    "FBgn0267502", "FBgn0267512", "FBgn0267517", "FBgn0267523",
-    "FBgn0250731", "FBgn0267514", "FBgn0085802", "FBgn0267498",
-    "FBgn0267501", "FBgn0267521", "FBgn0085813", "FBgn0267504",
-    "FBgn0267508", "FBgn0267511", "FBgn0085753", "FBgn0267497",
-    "FBgn0267522", "FBgn0085771", "FBgn0267519", "FBgn0085819",
-    "FBgn0267513", "FBgn0267520", "FBgn0267515",
-]
+def load_gene_list(path):
+    """Read a one-gene-id-per-line file (as produced by find_rrna_genes.py).
+    Returns [] and prints a warning if path is None or missing, so a sample
+    on a genome without a titer gene list yet just gets titer=0 instead of
+    crashing the whole run."""
+    if not path:
+        return []
+    if not os.path.exists(path):
+        print(f"WARNING: gene list not found ({path}) -- skipping")
+        return []
+    with open(path) as fh:
+        genes = [line.strip() for line in fh if line.strip()]
+    print(f"Loaded {len(genes)} gene(s) from {path}")
+    return genes
+
+
+host_rrna_genes     = load_gene_list(args.host_rrna_genes)
+symbiont_rrna_genes = load_gene_list(args.symbiont_rrna_genes)
 
 MITO_GENES_FALLBACK = [
     "FBgn0013674", "FBgn0013675", "FBgn0013676", "FBgn0013677",
@@ -125,16 +143,28 @@ sc.settings.set_figure_params(dpi=300, dpi_save=300, figsize=(2, 2), fontsize=6)
 # Wolbachia titer — vectorised
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calculate_wolbachia_titer(adata, rRNA_genes):
-    """Vectorised titer calculation using sparse matrix slicing."""
+def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
+    """Vectorised titer calculation using sparse matrix slicing.
+
+    titer = symbiont rRNA reads / (symbiont + host rRNA reads)
+
+    host_rrna_genes / symbiont_rrna_genes are resolved per-genome by
+    find_rrna_genes.py (scans the actual GTF for rRNA-annotated features)
+    rather than hardcoded, so this works for any host species x Wolbachia
+    strain combo instead of only Dmel + wMel.
+    """
     print("Calculating Wolbachia titer …")
 
-    wMel_genes  = ["GQX67_05945"]
-    var_names   = list(adata.var_names)
+    if not host_rrna_genes and not symbiont_rrna_genes:
+        print("  No rRNA gene lists supplied (--host_rrna_genes / "
+              "--symbiont_rrna_genes) -- setting wolbachia_titer to 0")
+        adata.obs['wolbachia_titer'] = np.zeros(adata.n_obs, dtype=np.float32)
+        return adata
 
-    # Single slice for all wMel genes
-    wMel_present = [g for g in wMel_genes   if g in var_names]
-    dmel_present = [g for g in rRNA_genes   if g in var_names]
+    var_names = list(adata.var_names)
+
+    symbiont_present = [g for g in symbiont_rrna_genes if g in var_names]
+    host_present      = [g for g in host_rrna_genes      if g in var_names]
 
     def _sum_genes(gene_list):
         if not gene_list:
@@ -145,17 +175,18 @@ def calculate_wolbachia_titer(adata, rRNA_genes):
             return np.asarray(X.sum(axis=1)).flatten().astype(np.float32)
         return X.sum(axis=1).astype(np.float32)
 
-    wMel_total = _sum_genes(wMel_present)
-    dmel_total = _sum_genes(dmel_present)
+    symbiont_total = _sum_genes(symbiont_present)
+    host_total     = _sum_genes(host_present)
 
-    denom = wMel_total + dmel_total
+    denom = symbiont_total + host_total
     # Where denominator is 0 (no rRNA detected), titer = 0
-    titer = np.where(denom > 0, wMel_total / denom, 0.0)
+    titer = np.where(denom > 0, symbiont_total / denom, 0.0)
 
     adata.obs['wolbachia_titer'] = titer
     print(f"  Mean: {titer.mean():.4f}  Median: {np.median(titer):.4f}  "
-          f"wMel genes used: {wMel_present}  "
-          f"Dmel rRNA genes present: {len(dmel_present)}")
+          f"Symbiont rRNA genes present: {symbiont_present} "
+          f"({len(symbiont_present)}/{len(symbiont_rrna_genes)})  "
+          f"Host rRNA genes present: {len(host_present)}/{len(host_rrna_genes)}")
     return adata
 
 
@@ -444,7 +475,7 @@ def process_data_with_metrics(key, matrix, log_to_file=True):
         all_metrics = []
 
         print("\n=== Calculating Wolbachia titer ===")
-        adata = calculate_wolbachia_titer(adata, rRNA_genes)
+        adata = calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes)
 
         raw_metrics = calculate_qc_metrics(adata, sample_name=key, stage="raw")
         all_metrics.append(raw_metrics)
