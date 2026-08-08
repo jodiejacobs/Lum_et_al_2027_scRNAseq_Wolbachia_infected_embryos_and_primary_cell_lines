@@ -115,6 +115,74 @@ def get_symbiont_rrna_genes(sample_id):
         return ""
     return config.get("symbiont_rrna_genes", {}).get(components["symbiont"], "")
 
+# Main rule that defines the final output
+rule all:
+    input:
+        # Only create outputs for condition-seq_platform combos that exist
+        # expand("results/combined/{condition}_{seq_platform}.h5ad",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # Use actual sample IDs for rRNA analysis
+        # expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
+        #        sample_id=SAMPLE_IDS,
+        #        gene=config.get("target_genes", ["GQX67_05945"])),
+        # expand("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
+        #        zip,
+        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
+        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
+        # Integration
+        "results/integrated/integrated.h5ad",
+        # Cell cycle for uninfected samples
+        "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
+        "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
+        # Validate PIPseq and 10X clustering
+        "results/validate_pipseq/label_transfer_confusion_matrix.csv",
+        "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
+        "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
+        # Cell cycle
+        "results/cellcycle/.done",
+        "results/integrated/integrated_by_cellcycle.h5ad",
+        # Cluster marker + pathway analysis
+        "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
+        expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/sceptic/{sample}/sceptic_{sample}.h5ad", 
+            sample=["wolbachia_infection"]),
+        expand("results/sceptic/{sample}/.done",
+            sample=["wolbachia_infection"]),
+                # Gene program and pathway analysis
+        "results/nmf_programs/.done",
+        "results/nmf_continuous_var/.done",
+        "results/nmf_categorical_var/.done",
+        "results/nmf_annotate_programs/program_cellcycle_overlap.csv",
+        expand("results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/.done",
+            sample=["wolbachia_infection"]),
+        expand("results/pseudotime_genes/{sample}/tradeseq.done",
+            sample=["wolbachia_infection"]),
+        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
+               sample_id=SAMPLE_IDS,
+               gene=config.get("target_genes", ["GQX67_05945"]))
+
+rule clean_only:
+    input:
+        expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
+                sample_id=SAMPLE_IDS,
+                gene=config.get("target_genes", ["GQX67_05945"]))
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Reference building: host-only + combined host/Wolbachia/16S kallisto|bustools
 # transcriptomes. These used to be run by hand via
@@ -131,6 +199,10 @@ def get_symbiont_rrna_genes(sample_id):
 # instead of the short "Dmel" key -- so output paths are plain strings with a
 # wildcard substituted in, while input: (which can be a function) maps that
 # directory-name wildcard back to the right config.yaml entry.
+#
+# NOTE: these rules are defined AFTER rule all/clean_only on purpose --
+# Snakemake uses the first rule in the file as the default target when none
+# is given on the command line, and target rules can't have wildcards.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def host_dir_name(host_key):
@@ -265,75 +337,6 @@ rule build_combined_reference:
             -f1 {output.transcripts} \
             {output.combined_fasta} {output.combined_gtf}
         """
-
-# Main rule that defines the final output
-rule all:
-    input:
-        # Only create outputs for condition-seq_platform combos that exist
-        # expand("results/combined/{condition}_{seq_platform}.h5ad",
-        #        zip,
-        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        # Use actual sample IDs for rRNA analysis
-        # expand("results/rRNA_analysis/alignment/{sample_id}/{gene}_aligned.bam",
-        #        sample_id=SAMPLE_IDS,
-        #        gene=config.get("target_genes", ["GQX67_05945"])),
-        # expand("results/rRNA_analysis/coverage/{sample_id}/{gene}_coverage.tsv",
-        #        sample_id=SAMPLE_IDS,
-        #        gene=config.get("target_genes", ["GQX67_05945"])),
-        # expand("results/rRNA_analysis/blast/{sample_id}/{gene}.blast.summary",
-        #        sample_id=SAMPLE_IDS,
-        #        gene=config.get("target_genes", ["GQX67_05945"])),
-        # expand("results/rRNA_analysis/plots/coverage_{condition}_{seq_platform}",
-        #        zip,
-        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        # expand("results/rRNA_analysis/plots/blast_{condition}_{seq_platform}",
-        #        zip,
-        #        condition=[c for c, p in CONDITION_PLATFORM_COMBOS],
-        #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
-        # Integration
-        "results/integrated/integrated.h5ad",
-        # Cell cycle for uninfected samples
-        "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-        "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
-        # Validate PIPseq and 10X clustering
-        "results/validate_pipseq/label_transfer_confusion_matrix.csv",
-        "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
-        "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
-        # Cell cycle
-        "results/cellcycle/.done",
-        "results/integrated/integrated_by_cellcycle.h5ad",
-        # Cluster marker + pathway analysis
-        "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
-        expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
-            sample=["wolbachia_infection"]),
-        expand("results/sceptic/{sample}/sceptic_{sample}.h5ad", 
-            sample=["wolbachia_infection"]),
-        expand("results/sceptic/{sample}/.done",
-            sample=["wolbachia_infection"]),
-                # Gene program and pathway analysis
-        "results/nmf_programs/.done",
-        "results/nmf_continuous_var/.done",
-        "results/nmf_categorical_var/.done",
-        "results/nmf_annotate_programs/program_cellcycle_overlap.csv",
-        expand("results/pseudotime_genes/{sample}/summary_dynamic_genes.csv",
-            sample=["wolbachia_infection"]),
-        expand("results/pseudotime_genes/{sample}/.done",
-            sample=["wolbachia_infection"]),
-        expand("results/pseudotime_genes/{sample}/tradeseq.done",
-            sample=["wolbachia_infection"]),
-        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
-               sample_id=SAMPLE_IDS,
-               gene=config.get("target_genes", ["GQX67_05945"]))
-
-rule clean_only:
-    input:
-        expand("results/annotated_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
-        expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
-                sample_id=SAMPLE_IDS,
-                gene=config.get("target_genes", ["GQX67_05945"]))
-
 
 # Establish rule precedencex
 ruleorder: map_pipseq > combine_files_by_condition_platform
