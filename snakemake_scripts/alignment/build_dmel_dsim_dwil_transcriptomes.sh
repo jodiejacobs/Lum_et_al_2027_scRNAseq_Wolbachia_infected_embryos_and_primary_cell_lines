@@ -83,9 +83,8 @@ build_ref () {
   python3 "$RRNA_SCRIPT" "$symbol_gtf" > "$outdir/host_rrna_genes.txt"
 }
 
-# dmel fasta name assumed to follow FlyBase convention -- adjust if yours differs
 build_ref dmel \
-  "$DMEL_DIR/dmel-all-chromosome-r6.68.fasta" \
+  "$DMEL_DIR/dmel-all-aligned-r6.68.fasta" \
   "$DMEL_DIR/dmel-all-r6.68.gtf" \
   "$DMEL_DIR/kallisto_ref"
 

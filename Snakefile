@@ -115,6 +115,174 @@ def get_symbiont_rrna_genes(sample_id):
         return ""
     return config.get("symbiont_rrna_genes", {}).get(components["symbiont"], "")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Reference building: host-only + combined host/Wolbachia/16S kallisto|bustools
+# transcriptomes. These used to be run by hand via
+# snakemake_scripts/alignment/build_dmel_dsim_dwil_transcriptomes.sh and
+# build_combined_host_wolbachia_references.sh; the rules below do the same
+# thing but as part of the DAG, so map_pipseq/map_10x/filter_h5ad
+# automatically trigger a (re)build whenever a reference is missing or a
+# source GTF/fasta changes, instead of relying on those scripts having been
+# run manually first. The standalone scripts still work for manual/offline
+# runs and use the identical commands.
+#
+# Snakemake doesn't allow output: to be a function (only input: can be), so
+# these rules use directory *names* as wildcards -- e.g. "Drosophila_melanogaster"
+# instead of the short "Dmel" key -- so output paths are plain strings with a
+# wildcard substituted in, while input: (which can be a function) maps that
+# directory-name wildcard back to the right config.yaml entry.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def host_dir_name(host_key):
+    return os.path.basename(os.path.dirname(config["host_genome"][host_key]["fasta"]))
+
+def symbiont_dir_name(symbiont_key):
+    return os.path.basename(os.path.dirname(config["wolbachia_genome"][symbiont_key]["gtf"]))
+
+FLYBASE_ROOT  = os.path.dirname(os.path.dirname(config["host_genome"]["Dmel"]["fasta"]))
+REF_ROOT      = os.path.dirname(os.path.dirname(config["wolbachia_genome"]["wMel"]["fasta"]))
+COMBINED_ROOT = os.path.dirname(config["Dmel_wMel"])
+
+HOST_KEY_BY_DIR = {host_dir_name(h): h for h in config["host_genome"]}
+SYMBIONT_KEY_BY_DIR = {symbiont_dir_name(s): s for s in config["wolbachia_genome"]}
+
+# combo wildcard ("Drosophila_melanogaster_wMel") -> everything build_combined_reference
+# needs, precomputed once. Matches the "<host_dir>_<symbiont>_combined_16S"
+# naming already used for the combined-ref dirs in config.yaml.
+COMBINED_REF_INFO = {}
+for _gk, _c in config["genome_components"].items():
+    _combo = f"{host_dir_name(_c['host'])}_{_c['symbiont']}"
+    COMBINED_REF_INFO[_combo] = {
+        "genome_key": _gk,
+        "host_fasta": config["host_genome"][_c["host"]]["fasta"],
+        "host_symbol_gtf": f"{FLYBASE_ROOT}/{host_dir_name(_c['host'])}/kallisto_ref/symbol.gtf",
+        "symbiont_fasta": config["wolbachia_genome"][_c["symbiont"]]["fasta"],
+        "symbiont_gtf": config["wolbachia_genome"][_c["symbiont"]]["gtf"],
+    }
+
+# dsim's fasta/GTF aren't on disk by default (legacy annotation only) --
+# fetch the current FlyBase r2.02 release if config["host_genome"]["Dsim"]
+# doesn't exist yet.
+rule download_dsim_annotation:
+    output:
+        fasta = config["host_genome"]["Dsim"]["fasta"],
+        gtf   = config["host_genome"]["Dsim"]["gtf"]
+    log:
+        "logs/reference/download_dsim_annotation.log"
+    shell:
+        """
+        exec > {log} 2>&1
+        dir=$(dirname {output.fasta})
+        mkdir -p "$dir"
+        cd "$dir"
+        wget -N https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.02_FB2017_04/fasta/dsim-all-chromosome-r2.02.fasta.gz
+        wget -N https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.02_FB2017_04/gtf/dsim-all-r2.02.gtf.gz
+        gunzip -kf dsim-all-chromosome-r2.02.fasta.gz dsim-all-r2.02.gtf.gz
+        """
+
+# Host-only (Drosophila-only) transcriptome per species, symbol-keyed.
+# wildcard {host_dir} = "Drosophila_melanogaster" / "Drosophila_simulans" / "Drosophila_willistoni"
+rule build_host_transcriptome:
+    input:
+        fasta = lambda wildcards: config["host_genome"][HOST_KEY_BY_DIR[wildcards.host_dir]]["fasta"],
+        gtf   = lambda wildcards: config["host_genome"][HOST_KEY_BY_DIR[wildcards.host_dir]]["gtf"]
+    output:
+        symbol_gtf  = FLYBASE_ROOT + "/{host_dir}/kallisto_ref/symbol.gtf",
+        transcripts = FLYBASE_ROOT + "/{host_dir}/kallisto_ref/transcripts.fa",
+        index       = FLYBASE_ROOT + "/{host_dir}/kallisto_ref/index.idx",
+        t2g         = FLYBASE_ROOT + "/{host_dir}/kallisto_ref/t2g.txt",
+        rrna        = FLYBASE_ROOT + "/{host_dir}/kallisto_ref/host_rrna_genes.txt"
+    params:
+        swap_script = config["swap_gene_id_script"],
+        rrna_script = config["find_rrna_genes_script"]
+    wildcard_constraints:
+        host_dir = "|".join(HOST_KEY_BY_DIR.keys())
+    log:
+        "logs/reference/build_host_{host_dir}.log"
+    threads: 8
+    resources:
+        slurm_partition = "medium", mem_mb = 32000, slurm_time = "4:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {KALLISTO_ENV}
+
+        python3 {params.swap_script} {input.gtf} {output.symbol_gtf}
+        gffread {output.symbol_gtf} -g {input.fasta} -w {output.transcripts}
+        kb ref \
+            -i {output.index} \
+            -g {output.t2g} \
+            -f1 {output.transcripts} \
+            {input.fasta} {output.symbol_gtf}
+        python3 {params.rrna_script} {output.symbol_gtf} > {output.rrna}
+        """
+
+# One rRNA gene list per Wolbachia strain, against that strain's own GTF
+# (native NCBI locus tags -- not run through the symbol swap).
+# wildcard {symbiont_dir} = "wMel_GCF_016584425.1" etc (that strain's source dir name)
+rule build_symbiont_rrna_list:
+    input:
+        gtf = lambda wildcards: config["wolbachia_genome"][SYMBIONT_KEY_BY_DIR[wildcards.symbiont_dir]]["gtf"]
+    output:
+        rrna = REF_ROOT + "/{symbiont_dir}/rrna_genes.txt"
+    params:
+        rrna_script = config["find_rrna_genes_script"]
+    wildcard_constraints:
+        symbiont_dir = "|".join(SYMBIONT_KEY_BY_DIR.keys())
+    log:
+        "logs/reference/rrna_{symbiont_dir}.log"
+    shell:
+        """
+        exec > {log} 2>&1
+        python3 {params.rrna_script} {input.gtf} > {output.rrna}
+        """
+
+# Combined host + Wolbachia strain + 16S reference, one per genome key used
+# in samples.csv (Dmel_wMel, Dsim_wRi_M23, etc -- config["genome_components"]).
+# wildcard {combo} = "Drosophila_melanogaster_wMel" etc; output dir matches
+# config[genome_key] exactly (see COMBINED_REF_INFO / COMBINED_ROOT above).
+rule build_combined_reference:
+    input:
+        host_fasta      = lambda wildcards: COMBINED_REF_INFO[wildcards.combo]["host_fasta"],
+        host_symbol_gtf = lambda wildcards: COMBINED_REF_INFO[wildcards.combo]["host_symbol_gtf"],
+        symbiont_fasta  = lambda wildcards: COMBINED_REF_INFO[wildcards.combo]["symbiont_fasta"],
+        symbiont_gtf    = lambda wildcards: COMBINED_REF_INFO[wildcards.combo]["symbiont_gtf"],
+        sixteen_s_fasta = config["sixteen_s_fasta"],
+        sixteen_s_gtf   = config["sixteen_s_gtf"]
+    output:
+        combined_fasta = COMBINED_ROOT + "/{combo}_combined_16S/combined.fasta",
+        combined_gtf   = COMBINED_ROOT + "/{combo}_combined_16S/combined.gtf",
+        transcripts    = COMBINED_ROOT + "/{combo}_combined_16S/transcripts.fa",
+        index          = COMBINED_ROOT + "/{combo}_combined_16S/index.idx",
+        t2g            = COMBINED_ROOT + "/{combo}_combined_16S/t2g.txt"
+    wildcard_constraints:
+        combo = "|".join(COMBINED_REF_INFO.keys())
+    log:
+        "logs/reference/build_combined_{combo}.log"
+    threads: 8
+    resources:
+        slurm_partition = "medium", mem_mb = 64000, slurm_time = "4:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {KALLISTO_ENV}
+
+        mkdir -p $(dirname {output.combined_fasta})
+        awk 'FNR==1 && NR!=1 {{print ""}} {{print}}' \
+            {input.host_fasta} {input.symbiont_fasta} {input.sixteen_s_fasta} > {output.combined_fasta}
+        awk 'FNR==1 && NR!=1 {{print ""}} {{print}}' \
+            {input.host_symbol_gtf} {input.symbiont_gtf} {input.sixteen_s_gtf} > {output.combined_gtf}
+
+        gffread {output.combined_gtf} -g {output.combined_fasta} -w {output.transcripts}
+        kb ref \
+            -i {output.index} \
+            -g {output.t2g} \
+            -f1 {output.transcripts} \
+            {output.combined_fasta} {output.combined_gtf}
+        """
+
 # Main rule that defines the final output
 rule all:
     input:
@@ -192,7 +360,9 @@ ruleorder: map_10x > combine_files_by_condition_platform
 rule map_pipseq:
     input:
         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
-        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
+        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
     output:
         h5ad = "results/h5ad_results/{sample_id}.h5ad",
         bus = "results/pipseq/{sample_id}/output.unfiltered.bus",
@@ -201,14 +371,12 @@ rule map_pipseq:
     params:
         sample_id = "{sample_id}",
         outdir = "results/pipseq/{sample_id}",
-        genome = lambda wildcards: get_genome(wildcards.sample_id),
-        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
-        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
+        genome = lambda wildcards: get_genome(wildcards.sample_id)
     wildcard_constraints:
         sample_id = ".*_pipseq"  # Only match samples ending with _pipseq
     log:
         "logs/pipseq/{sample_id}.log"
-    threads: 
+    threads:
         config["pipseeker_threads"]
     resources:
         slurm_partition = config["pipseeker_partition"],
@@ -220,19 +388,19 @@ rule map_pipseq:
         echo "Starting PIPseq processing for {params.sample_id}"
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
-        
+
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {KALLISTO_ENV}
 
         kb count \
-            -i {params.kallisto_index} \
+            -i {input.kallisto_index} \
             --keep-tmp \
-            -g {params.transcripts_to_genes} \
+            -g {input.transcripts_to_genes} \
             -x 0,0,16:0,16,28:1,0,0 \
             -o {params.outdir} \
             -t {threads} \
             --h5ad \
-            {input.read1} {input.read2} 
+            {input.read1} {input.read2}
 
         echo "Moving h5ad file to final location"
         # Move the h5ad file to the expected location
@@ -244,7 +412,9 @@ rule map_pipseq:
 rule map_10x:
     input:
         read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
-        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
+        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
     output:
         h5ad = "results/h5ad_results/{sample_id}.h5ad",
         bus = "results/10x/{sample_id}/output.unfiltered.bus",
@@ -253,15 +423,13 @@ rule map_10x:
     params:
         sample_id = "{sample_id}",
         outdir = "results/10x/{sample_id}",
-        genome = lambda wildcards: get_genome(wildcards.sample_id),
-        kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
-        transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
+        genome = lambda wildcards: get_genome(wildcards.sample_id)
     wildcard_constraints:
         sample_id = ".*_10x"  # Only match samples ending with _10x
     log:
         "logs/10x/{sample_id}.log"
     threads:
-        config["cellranger_threads"] 
+        config["cellranger_threads"]
     resources:
         slurm_partition = config["cellranger_partition"],
         mem_mb = config["cellranger_mem"],
@@ -272,20 +440,20 @@ rule map_10x:
         echo "Starting 10x processing for {params.sample_id}"
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
-        
+
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {KALLISTO_ENV}
-        
+
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
-            -i {params.kallisto_index} \
-            -g {params.transcripts_to_genes} \
+            -i {input.kallisto_index} \
+            -g {input.transcripts_to_genes} \
             --keep-tmp \
             -x 10xv3 \
             -o {params.outdir} \
             -t {threads} \
             --h5ad \
-            {input.read1} {input.read2} 
+            {input.read1} {input.read2}
 
         echo "Moving h5ad file to final location"
         # Move the h5ad file to the expected locatio
@@ -295,13 +463,14 @@ rule map_10x:
 
 # Filter h5ad output and output qc:
 rule filter_h5ad:
-    input: "results/h5ad_results/{sample_id}.h5ad"
+    input:
+        h5ad = "results/h5ad_results/{sample_id}.h5ad",
+        host_rrna_genes = lambda wildcards: get_host_rrna_genes(wildcards.sample_id),
+        symbiont_rrna_genes = lambda wildcards: get_symbiont_rrna_genes(wildcards.sample_id)
     output:
         filtered_h5ad = "results/filtered_h5ad/{sample_id}.h5ad"
     params:
-        script = config["filter_script"],
-        host_rrna_genes = lambda wildcards: get_host_rrna_genes(wildcards.sample_id),
-        symbiont_rrna_genes = lambda wildcards: get_symbiont_rrna_genes(wildcards.sample_id)
+        script = config["filter_script"]
     log:
         "logs/filter/{sample_id}.log"
     threads:
@@ -314,19 +483,19 @@ rule filter_h5ad:
         """
         exec > {log} 2>&1
         echo "Starting filtering for {wildcards.sample_id}"
-        echo "Input file: {input}"
-        
+        echo "Input file: {input.h5ad}"
+
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --input {input} \
+            --input {input.h5ad} \
             --output {output.filtered_h5ad} \
-            --host_rrna_genes "{params.host_rrna_genes}" \
-            --symbiont_rrna_genes "{params.symbiont_rrna_genes}"
+            --host_rrna_genes "{input.host_rrna_genes}" \
+            --symbiont_rrna_genes "{input.symbiont_rrna_genes}"
 
         echo "Compressing original h5ad file"
-        gzip {input}
+        gzip {input.h5ad}
         echo "Filtering complete for {wildcards.sample_id}"
         """
 
