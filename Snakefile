@@ -160,27 +160,10 @@ for _gk, _c in config["genome_components"].items():
         "symbiont_gtf": config["wolbachia_genome"][_c["symbiont"]]["gtf"],
     }
 
-# dsim's fasta/GTF aren't on disk by default (legacy annotation only) --
-# fetch the current FlyBase r2.02 release if config["host_genome"]["Dsim"]
-# doesn't exist yet.
-rule download_dsim_annotation:
-    output:
-        fasta = config["host_genome"]["Dsim"]["fasta"],
-        gtf   = config["host_genome"]["Dsim"]["gtf"]
-    log:
-        "logs/reference/download_dsim_annotation.log"
-    shell:
-        """
-        exec > {log} 2>&1
-        dir=$(dirname {output.fasta})
-        mkdir -p "$dir"
-        cd "$dir"
-        wget -N https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.02_FB2017_04/fasta/dsim-all-chromosome-r2.02.fasta.gz
-        wget -N https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.02_FB2017_04/gtf/dsim-all-r2.02.gtf.gz
-        gunzip -kf dsim-all-chromosome-r2.02.fasta.gz dsim-all-r2.02.gtf.gz
-        """
-
 # Host-only (Drosophila-only) transcriptome per species, symbol-keyed.
+# All three species' fasta/GTF (including dsim's r2.02 release) are expected
+# to already exist on disk at the paths in config["host_genome"] -- nothing
+# downloads them.
 # wildcard {host_dir} = "Drosophila_melanogaster" / "Drosophila_simulans" / "Drosophila_willistoni"
 rule build_host_transcriptome:
     input:
