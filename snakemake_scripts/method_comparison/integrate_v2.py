@@ -83,6 +83,71 @@ def _sanitize_obs(adata):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Dsim -> Dmel ortholog remapping
+# ─────────────────────────────────────────────────────────────────────────────
+# Dsim samples are quantified against the D. simulans genome, so their
+# adata.var_names are D. simulans FlyBase IDs -- a different ID namespace
+# from the D. melanogaster FlyBase IDs used by the Dmel samples. Left as-is,
+# an outer-join concat would treat every Dsim gene as absent from every Dmel
+# sample (and vice versa) instead of aligning orthologous genes. We rename
+# each Dsim sample's var_names onto the orthologous Dmel FlyBase ID (from a
+# reciprocal-best-hit ortholog table) before concatenation, so orthologous
+# host genes line up across species. Genes without a clean 1:1 ortholog
+# (including Wolbachia/16S genes, which aren't in the host ortholog table)
+# are dropped for that sample -- they were never comparable across species
+# anyway, and Wolbachia titer is already computed upstream in filter_h5ad.
+
+def load_ortholog_map(path):
+    """Load a Dsim -> Dmel FlyBase ID reciprocal-best-hit ortholog table.
+
+    Expects tab-separated columns Dsim, Dmel (extra columns like pident/
+    evalue/bitscore are ignored). Rows where a Dsim or Dmel ID appears more
+    than once are dropped so the mapping stays strictly 1:1 -- an ambiguous
+    many:many hit shouldn't be silently collapsed onto a single gene ID
+    during cross-species integration.
+
+    Returns (dsim_to_dmel dict, dsim_ids set, dmel_ids set).
+    """
+    df = pd.read_csv(path, sep="\t")
+    n_raw = len(df)
+    df = df.drop_duplicates(subset="Dsim", keep=False)
+    df = df.drop_duplicates(subset="Dmel", keep=False)
+    n_kept = len(df)
+    if n_kept < n_raw:
+        print(f"  Ortholog map: dropped {n_raw - n_kept}/{n_raw} non-1:1 rows from {path}")
+    dsim_to_dmel = dict(zip(df["Dsim"], df["Dmel"]))
+    print(f"  Loaded {len(dsim_to_dmel)} 1:1 Dsim->Dmel orthologs from {path}")
+    return dsim_to_dmel, set(df["Dsim"]), set(df["Dmel"])
+
+
+def _looks_like_dsim(var_names, dsim_ids, dmel_ids):
+    """Decide whether a sample's gene IDs belong to the Dsim or Dmel FlyBase
+    ID namespace, by counting how many var_names land in each side of the
+    ortholog table. FlyBase gene IDs are unique per species record (never
+    reused across species), so a sample's IDs should land overwhelmingly on
+    one side or the other."""
+    vs = set(var_names)
+    n_dsim = len(vs & dsim_ids)
+    n_dmel = len(vs & dmel_ids)
+    return n_dsim > n_dmel, n_dsim, n_dmel
+
+
+def remap_dsim_to_dmel(adata, dsim_to_dmel, label=""):
+    """Rename a Dsim sample's var_names (Dsim FlyBase IDs) to the
+    orthologous Dmel FlyBase ID, dropping genes with no 1:1 ortholog."""
+    mapped = adata.var_names.map(dsim_to_dmel)
+    keep = mapped.notna().values
+    n_total, n_kept = adata.n_vars, int(keep.sum())
+    print(f"  [{label}] Dsim->Dmel remap: {n_kept}/{n_total} genes have a "
+          f"1:1 Dmel ortholog (kept); {n_total - n_kept} dropped (no ortholog, "
+          "incl. Wolbachia/16S genes)")
+    adata = adata[:, keep].copy()
+    adata.var_names = mapped[keep].astype(str).values
+    adata.var_names_make_unique()
+    return adata
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Metadata extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -815,36 +880,50 @@ def integrate(
     optimize_resolution=True,
     resolutions=None,
     leiden_resolution=0.5,
+    ortholog_map=None,
 ):
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
+
+    dsim_to_dmel, dsim_ids, dmel_ids = (
+        load_ortholog_map(ortholog_map) if ortholog_map else ({}, set(), set())
+    )
 
     # ── Load and concatenate ──────────────────────────────────────────────────
     print("Loading files …")
     adatas = []
     for fp in files:
         a = sc.read_h5ad(fp)
-        
+
         if a.raw is None:
             raise ValueError(
                 f"{fp} has no .raw. Re-run filter.py with the updated "
                 "analyze_filtered_adata() that saves adata.raw = adata "
                 "before normalisation."
             )
-        
+
         # Reconstruct AnnData from raw counts
         raw_X = a.raw.X
         if scipy.sparse.issparse(raw_X):
             raw_X = raw_X.toarray()
-        
+
         a_raw = ad.AnnData(
             X=scipy.sparse.csr_matrix(raw_X.astype(np.float32)),
             obs=a.obs.copy(),
             var=a.raw.var.copy(),
         )
         a_raw.obs[batch_key] = os.path.splitext(os.path.basename(fp))[0]
+
+        if dsim_to_dmel:
+            is_dsim, n_dsim, n_dmel = _looks_like_dsim(a_raw.var_names, dsim_ids, dmel_ids)
+            if is_dsim:
+                print(f"  {os.path.basename(fp)}: detected as Dsim "
+                      f"({n_dsim} Dsim IDs vs {n_dmel} Dmel IDs among var_names) "
+                      "-- remapping var_names to Dmel orthologs")
+                a_raw = remap_dsim_to_dmel(a_raw, dsim_to_dmel, label=os.path.basename(fp))
+
         adatas.append(a_raw)
-    
+
     # outer join — genes absent from some samples filled with 0
     adata = ad.concat(adatas, join="outer", index_unique="-")
     
@@ -926,6 +1005,13 @@ def main():
                         action="store_false")
     parser.add_argument("--resolutions", type=float, nargs="+", default=None,
                         help="Custom resolution sweep values")
+    parser.add_argument("--ortholog_map", type=str, default=None,
+                        help="TSV with Dsim/Dmel FlyBase ID columns (reciprocal "
+                             "best hit orthologs). If given, samples detected as "
+                             "Dsim (by gene ID overlap with this table) have their "
+                             "var_names remapped to the orthologous Dmel FlyBase "
+                             "ID before integration. If omitted, no remapping is "
+                             "done.")
 
     args = parser.parse_args()
 
@@ -941,6 +1027,7 @@ def main():
         optimize_resolution=args.optimize_resolution,
         resolutions=args.resolutions,
         leiden_resolution=args.resolution,
+        ortholog_map=args.ortholog_map,
     )
 
 

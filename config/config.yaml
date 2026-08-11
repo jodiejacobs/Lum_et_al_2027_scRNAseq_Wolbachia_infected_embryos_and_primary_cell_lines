@@ -84,6 +84,12 @@ sixteen_s_gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/16S_fixed.
 swap_gene_id_script:    "snakemake_scripts/reference/swap_gene_id_to_symbol.py"
 find_rrna_genes_script: "snakemake_scripts/reference/find_rrna_genes.py"
 
+# Dsim -> Dmel FlyBase gene ID orthologs (reciprocal best hit), used by the
+# integrate script to translate Dsim samples' adata.var gene IDs onto the
+# corresponding Dmel FlyBase ID so Dsim and Dmel samples integrate gene-for-
+# gene. Columns: Dsim, Dmel, pident, evalue, bitscore.
+ortholog_map: "/private/groups/russelllab/jodie/scRNAseq/reference/orthologs/dmel_dsim_orthologs_rbh.tsv"
+
 # Software paths
 fastq_dir: "/private/groups/russelllab/jodie/sequencing_data/scRNAseq/PIP-seq_cells/Jacobs_10524_241203B9" # Add the path to the directory containing the FASTQ files for pipseq
 combine_script: "snakemake_scripts/analysis/integrate_h5ad_by_condition.py"

@@ -695,7 +695,8 @@ rule extract_abundant_16s:
 
 rule integrate_uninfected:
     input:
-        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "wMel" not in s and "wRi" not in s]),
+        files      = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "wMel" not in s and "wRi" not in s]),
+        orthologs  = config["ortholog_map"],
     output:
         integrated = "results/integrated/integrated_uninfected.h5ad",
     params:
@@ -706,7 +707,7 @@ rule integrate_uninfected:
         out_path     = "results/integrated/integrated_uninfected.h5ad",
         resolution   = '0.3',
     log:
-        "logs/integrate/integrate_uninfected.log"   
+        "logs/integrate/integrate_uninfected.log"
     threads:
         config.get("integrate_threads", 16)
     resources:
@@ -731,18 +732,20 @@ rule integrate_uninfected:
             --resolution {params.resolution} \
             --out_path {params.out_path} \
             --fig_dir {params.fig_dir} \
-            --resolution {params.resolution} 
-            
+            --ortholog_map {input.orthologs} \
+            --resolution {params.resolution}
+
         echo "Integration of uninfected samples complete"
         """
 
-rule integrate: 
+rule integrate:
     input:
-        files = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS)
+        files     = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        orthologs = config["ortholog_map"],
     output:
         integrated = "results/integrated/integrated.h5ad"
     params:
-        files         = "results/filtered_h5ad/*.h5ad",   
+        files         = "results/filtered_h5ad/*.h5ad",
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
@@ -774,8 +777,9 @@ rule integrate:
             --n_pcs 30 \
             --resolution {params.resolution} \
             --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} 
-            
+            --fig_dir {params.fig_dir} \
+            --ortholog_map {input.orthologs}
+
         echo "Integration complete"
         """
 
