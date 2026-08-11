@@ -11,13 +11,13 @@ sra_tools_env: "/private/groups/russelllab/jodie/miniforge3/envs/sra-tools"
 
 # Path to kallisto_index/genome:
 # Path to genome reference files, keyed by the genome name used in column 2 of samples.csv:
-Dmel_wMel: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wMel_combined_16S"
-Dmel_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wRi_Riv84_combined_16S"
-Dmel_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wWil_combined_16S"
-Dsim_wMel: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wMel_combined_16S"
-Dsim_wRi_M23: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wRi_M23_combined_16S"
-Dsim_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_simulans_wRi_Riv84_combined_16S"
-Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_willistoni_wWil_combined_16S"
+Dmel_wMel: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S"
+Dmel_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wRi_Riv84_combined_16S"
+Dmel_wWil: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wWil_combined_16S"
+Dsim_wMel: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_simulans_wMel_combined_16S"
+Dsim_wRi_M23: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_simulans_wRi_M23_combined_16S"
+Dsim_wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_simulans_wRi_Riv84_combined_16S"
+Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_willistoni_wWil_combined_16S"
 # All 7 genome dirs above are built by build_combined_host_wolbachia_references.sh
 # (host genome+GTF + that Wolbachia strain's genome+GTF + shared 16S reference,
 # concatenated and run through gffread + kb ref together).
@@ -94,7 +94,7 @@ cyclum_analysis_script: "snakemake_scripts/analysis/cyclum_cellcycle_analysis.py
 # multi-species h5ad (cluster_marker_pathway, nmf_annotate_programs). Per-sample
 # kallisto mapping (map_pipseq/map_10x) instead pulls index.idx/t2g.txt from
 # each sample's own genome directory above.
-transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/reference/Drosophila_melanogaster_wMel_combined_16S/t2g.txt"
+transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S/t2g.txt"
 project_cell_cycle_script: "snakemake_scripts/method_comparison/integrate_by_ref.py"
 
 # Compute resources for cellranger 
