@@ -37,7 +37,7 @@ set -euo pipefail
 date; hostname; pwd
 
 WORKDIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs
-SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs  # where get_id_map.py / filter_rbh.py live
+SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/scripts/orthologs  # where get_id_map.py / filter_rbh.py live
 
 DMEL_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_melanogaster/dmel_r6.68_FB2026_02/fasta/dmel-all-translation-r6.68.fasta.gz"
 DSIM_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.01_FB2015_01/fasta/dsim-all-translation-r2.01.fasta.gz"
@@ -45,6 +45,10 @@ DSIM_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.01_F
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
+# Make sure the diamond env's python/diamond binaries are on PATH even if
+# the submitting shell's activation state didn't carry through to the job.
+source "$(mamba info --base)/etc/profile.d/conda.sh"
+mamba activate diamond
 
 # ---- 1. download proteomes ----
 if [ ! -f dmel_proteins.fasta ]; then
