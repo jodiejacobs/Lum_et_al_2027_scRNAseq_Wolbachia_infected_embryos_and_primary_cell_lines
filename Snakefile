@@ -115,6 +115,95 @@ def get_symbiont_rrna_genes(sample_id):
         return ""
     return config.get("symbiont_rrna_genes", {}).get(components["symbiont"], "")
 
+def get_symbiont_strain(sample_id):
+    """This sample's Wolbachia strain key (e.g. 'wMel'), via genome_components."""
+    genome = get_genome(sample_id)
+    components = config.get("genome_components", {}).get(genome)
+    return components["symbiont"] if components else None
+
+def get_symbiont_fasta(sample_id):
+    """This sample's own Wolbachia strain genome fasta -- used as the BWA
+    reference for count_16s_reads so non-wMel strains align (and are
+    therefore counted) against their own genome instead of a wMel-only
+    reference. Falls back to config['ref_fasta'] if the strain can't be
+    resolved."""
+    strain = get_symbiont_strain(sample_id)
+    return config.get("wolbachia_genome", {}).get(strain, {}).get("fasta", config["ref_fasta"])
+
+# Directory-name wildcard <-> Wolbachia strain key, precomputed once, used by
+# rule bwa_index_symbiont_genome (Snakemake doesn't allow output: to be a
+# function, only input:, so the per-strain genome directory name -- already
+# unique per strain -- is used as the rule's wildcard instead of the strain
+# key itself).
+def _wolbachia_dir_name(strain_key):
+    return os.path.basename(os.path.dirname(config["wolbachia_genome"][strain_key]["fasta"]))
+
+WOLBACHIA_DIR_BY_STRAIN = {s: _wolbachia_dir_name(s) for s in config.get("wolbachia_genome", {})}
+STRAIN_BY_WOLBACHIA_DIR = {v: k for k, v in WOLBACHIA_DIR_BY_STRAIN.items()}
+WOLBACHIA_REF_ROOT = (
+    os.path.dirname(os.path.dirname(config["wolbachia_genome"]["wMel"]["fasta"]))
+    if config.get("wolbachia_genome") else ""
+)
+
+def get_bwa_index_flag(sample_id):
+    """Path to this sample's Wolbachia strain's shared BWA-index-done flag
+    (rule bwa_index_symbiont_genome) -- lets count_16s_reads depend on the
+    index instead of every per-sample job racing to build it themselves
+    when several samples share the same strain."""
+    strain = get_symbiont_strain(sample_id)
+    strain_dir = WOLBACHIA_DIR_BY_STRAIN.get(strain)
+    if not strain_dir:
+        return []
+    return WOLBACHIA_REF_ROOT + "/" + strain_dir + "/.bwa_index.done"
+
+_SYMBIONT_16S_REGION_CACHE = {}
+
+def get_symbiont_16s_region(sample_id):
+    """Resolve 'locus_tag::seqid:start-end' for this sample's Wolbachia
+    strain's 16S rRNA gene: looks up the single locus tag configured per
+    strain in config['symbiont_16s_gene'], then finds its coordinates by
+    scanning that strain's own GTF (wolbachia_genome[strain].gtf). Falls
+    back to config['rRNA_16S_region'] (or its wMel-only default) if the
+    strain/locus_tag/GTF aren't resolvable or the locus_tag isn't found, so
+    an unconfigured strain degrades gracefully instead of crashing the DAG.
+    Result is cached per (strain, locus_tag) so the GTF is only scanned
+    once even though every sample of that strain calls this.
+    """
+    strain = get_symbiont_strain(sample_id)
+    fallback = config.get("rRNA_16S_region", "GQX67_05945::NZ_CP046925.1:1167785-1169290")
+    locus_tag = config.get("symbiont_16s_gene", {}).get(strain)
+    gtf = config.get("wolbachia_genome", {}).get(strain, {}).get("gtf")
+    if not (strain and locus_tag and gtf):
+        return fallback
+
+    cache_key = (strain, locus_tag)
+    if cache_key in _SYMBIONT_16S_REGION_CACHE:
+        return _SYMBIONT_16S_REGION_CACHE[cache_key]
+
+    region = fallback
+    needle = f'"{locus_tag}"'
+    try:
+        with open(gtf) as fh:
+            for line in fh:
+                if line.startswith("#") or needle not in line:
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 9:
+                    continue
+                if (f'locus_tag "{locus_tag}"' in fields[8]
+                        or f'gene_id "{locus_tag}"' in fields[8]):
+                    region = f"{locus_tag}::{fields[0]}:{fields[3]}-{fields[4]}"
+                    break
+        if region == fallback:
+            print(f"WARNING: locus_tag {locus_tag!r} not found in {gtf} -- "
+                  f"using fallback 16S region for strain {strain}")
+    except FileNotFoundError:
+        print(f"WARNING: GTF not found for strain {strain} ({gtf}) -- "
+              f"using fallback 16S region")
+
+    _SYMBIONT_16S_REGION_CACHE[cache_key] = region
+    return region
+
 # Main rule that defines the final output
 rule all:
     input:
@@ -405,6 +494,46 @@ rule combine_files_by_condition_platform:
 ##################################################################
 # rRNA analysis rules
 ##################################################################
+
+# One-time BWA index per Wolbachia strain genome, shared by every sample
+# mapped to that strain. Built as its own rule (rather than indexing
+# ad hoc inside count_16s_reads' shell block) so Snakemake's own DAG
+# dedups it -- without this, multiple samples of the same strain running
+# concurrently under SLURM would all try to `bwa index` the same fasta at
+# once and race/corrupt each other's index files.
+rule bwa_index_symbiont_genome:
+    input:
+        fasta = lambda wildcards: config["wolbachia_genome"][STRAIN_BY_WOLBACHIA_DIR[wildcards.strain_dir]]["fasta"]
+    output:
+        flag = touch(WOLBACHIA_REF_ROOT + "/{strain_dir}/.bwa_index.done")
+    wildcard_constraints:
+        strain_dir = "|".join(STRAIN_BY_WOLBACHIA_DIR.keys())
+    log:
+        "logs/reference/bwa_index_{strain_dir}.log"
+    resources:
+        slurm_partition = "medium", mem_mb = 8000, slurm_time = "1:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SRA_TOOLS_ENV}
+        bwa index {input.fasta}
+        """
+
+# NOTE: align_gene_reads / calculate_coverage / extract_16s_sequences /
+# blast_16s / summarize_blast / plot_coverage_by_group / plot_blast_by_group
+# / extract_abundant_16s below are NOT part of rule all's or clean_only's
+# targets (see the commented-out expand() calls in rule all) -- they're
+# inactive legacy rRNA-analysis rules. They still assume the single
+# wMel-only custom reference (config['ref_fasta']/'rRNA_regions', a small
+# hand-built amplicon fasta whose contigs are named "{gene}::<accession>")
+# rather than resolving a per-sample Wolbachia strain the way
+# count_16s_reads below now does. If you want to reactivate this
+# coverage/BLAST branch for non-wMel strains, it needs the same treatment:
+# align against get_symbiont_fasta(sample_id) and slice by
+# get_symbiont_16s_region(sample_id) instead of the "{gene}::" CHROM-prefix
+# trick, which only works against that custom amplicon reference.
+
 # Rule 1: Align extracted gene reads to rRNA reference with BWA
 rule align_gene_reads:
     input:
@@ -1275,15 +1404,22 @@ python scripts/method_comparison/cell_cycle_association.py \
 # Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample
 rule count_16s_reads:
     input:
-        r2  = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
-        ref = config["ref_fasta"]
+        r2             = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        ref            = lambda wildcards: get_symbiont_fasta(wildcards.sample_id),
+        bwa_index_flag = lambda wildcards: get_bwa_index_flag(wildcards.sample_id)
     output:
         counts = "results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt"
     wildcard_constraints:
         # Only allow sample_ids that currently exist in the dataframe
         sample_id = "|".join(SAMPLE_IDS)
     params:
-        region = config.get("rRNA_16S_region", "GQX67_05945::NZ_CP046925.1:1167785-1169290")
+        # Resolved per-sample from that sample's own Wolbachia strain (see
+        # get_symbiont_16s_region) -- e.g. wMel samples get wMel's
+        # GQX67_RS05935 region, wRi_M23 samples get M23_00679's, etc.
+        # {wildcards.gene} is just the generic path label from
+        # config['target_genes']; the region (and the gene label actually
+        # written into the output row below) is the real per-strain locus.
+        region = lambda wildcards: get_symbiont_16s_region(wildcards.sample_id)
     log:
         "logs/count_16s/{sample_id}_{gene}.log"
     threads: 16
@@ -1294,7 +1430,7 @@ rule count_16s_reads:
     shell:
         """
         exec > {log} 2>&1
-        echo "Counting 16S vs total reads for {wildcards.sample_id} - {wildcards.gene}"
+        echo "Counting 16S vs total reads for {wildcards.sample_id} (region: {params.region})"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SRA_TOOLS_ENV}
@@ -1303,11 +1439,19 @@ rule count_16s_reads:
 
         SORTED=results/rRNA_analysis/read_counts/{wildcards.sample_id}/all_aligned.bam
 
-        # Align R2 to the combined Dmel + wMel rRNA reference, sort, index
+        # Align R2 to this sample's own Wolbachia strain genome (not a
+        # wMel-only reference -- see get_symbiont_fasta), sort, index
         bwa mem -t {threads} {input.ref} {input.r2} | \
             samtools view -Sb | \
             samtools sort -@ {threads} -o $SORTED
         samtools index $SORTED
+
+        # {params.region} is "<locus_tag>::<seqid>:<start>-<end>" for this
+        # sample's own strain -- use the locus_tag piece as the reported
+        # gene label since it's the gene actually analysed for this sample,
+        # not the generic {wildcards.gene} path label
+        GENE_LABEL="{params.region}"
+        GENE_LABEL="${{GENE_LABEL%%::*}}"
 
         # Reads mapped to the 16S region (primary alignments only, excludes
         # unmapped/secondary/supplementary via -F 0x904)
@@ -1322,7 +1466,7 @@ rule count_16s_reads:
         # Write tab-delimited summary
         printf "sample\\tgene\\tregion\\tsixteenS_reads\\ttotal_reads\\tmapped_reads\\n" > {output.counts}
         printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \
-            "{wildcards.sample_id}" "{wildcards.gene}" "{params.region}" \
+            "{wildcards.sample_id}" "$GENE_LABEL" "{params.region}" \
             "$SIXTEEN_S" "$TOTAL" "$MAPPED" >> {output.counts}
 
         echo "Done. 16S=$SIXTEEN_S  total=$TOTAL  mapped=$MAPPED"

@@ -42,6 +42,18 @@ symbiont_rrna_genes:
   wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/rrna_genes.txt"
   wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/rrna_genes.txt"
 
+# Single 16S rRNA gene (locus_tag) per Wolbachia strain, used by the
+# count_16s_reads rule to quantify 16S rRNA reads via read alignment
+# (separate from the transcriptome-level Wolbachia titer calculated from
+# symbiont_rrna_genes above). Genomic coordinates are resolved automatically
+# from that strain's own GTF (wolbachia_genome[strain].gtf) at rule-eval
+# time -- only the locus_tag needs to be supplied here.
+symbiont_16s_gene:
+  wMel:      "GQX67_RS05935"
+  wRi_Riv84: "WRI_RS06005"
+  wRi_M23:   "M23_00679"
+  wWil:      "ABL518_RS01510"
+
 # Maps each genome key used in samples.csv (column 2) to its host species and
 # Wolbachia strain, so filter_h5ad can look up the right pair of rRNA gene
 # lists above for any species x strain combination without hardcoding
