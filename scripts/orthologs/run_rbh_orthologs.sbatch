@@ -39,8 +39,8 @@ date; hostname; pwd
 WORKDIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs
 SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs  # where get_id_map.py / filter_rbh.py live
 
-DMEL_PEP_URL="https://ftp.flybase.net/releases/current/precomputed_files/genes/fasta/dmel-all-translation-current.fasta.gz"
-DSIM_PEP_URL="https://ftp.flybase.net/genomes/Drosophila_simulans/dsim_r2.01_FB2015_01/fasta/dsim-all-translation-r2.01.fasta.gz"
+DMEL_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_melanogaster/dmel_r6.68_FB2026_02/fasta/dmel-all-translation-r6.68.fasta.gz"
+DSIM_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.01_FB2015_01/fasta/dsim-all-translation-r2.01.fasta.gz"
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
