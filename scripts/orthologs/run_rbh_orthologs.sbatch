@@ -1,9 +1,16 @@
 #!/bin/bash
 #SBATCH --job-name=dmel_dsim_rbh
+#SBATCH --mail-user=jodiejacobs1021@gmail.com
+#SBATCH --mail-type=FAIL,END
+#SBATCH --output=rbh_orthologs_%j.out
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --mem=32gb
 #SBATCH --time=04:00:00
-#SBATCH --output=rbh_orthologs_%j.log
+#SBATCH --partition=medium
+# Optional: uncomment and set if you belong to multiple Slurm accounts
+# #SBATCH --account=<GROUP>
 
 # Genome-wide D. melanogaster <-> D. simulans ortholog table via
 # reciprocal best BLAST hit (DIAMOND), since FlyBase no longer ships
@@ -25,6 +32,9 @@
 #   4. Adjust #SBATCH resources to your cluster's partition limits.
 
 set -euo pipefail
+
+# Log host, start time, and working directory for troubleshooting
+date; hostname; pwd
 
 WORKDIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs
 SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs  # where get_id_map.py / filter_rbh.py live
@@ -75,3 +85,5 @@ python "$SCRIPT_DIR/filter_rbh.py" \
 
 echo "Done. Genome-wide ortholog table: $WORKDIR/dmel_dsim_orthologs_rbh.tsv"
 echo "Columns: geneA(dsim) geneB(dmel) pident evalue bitscore"
+
+date
