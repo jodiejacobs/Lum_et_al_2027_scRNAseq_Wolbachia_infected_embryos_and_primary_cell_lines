@@ -45,8 +45,6 @@ DSIM_PEP_URL="https://ftp.flybase.net/genomes/Drosophila_simulans/dsim_r2.01_FB2
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-source "$(mamba info --base)/etc/profile.d/conda.sh"
-mamba activate diamond
 
 # ---- 1. download proteomes ----
 if [ ! -f dmel_proteins.fasta ]; then

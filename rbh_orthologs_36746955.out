@@ -1,0 +1,5 @@
+Tue Aug 11 01:46:24 PM PDT 2026
+phoenix-08.prism
+/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines
+/var/lib/slurm/slurmd/job36746955/slurm_script: line 48: 
+ base environment : /private/groups/russelllab/jodie/miniforge3/etc/profile.d/conda.sh: No such file or directory
