@@ -45,11 +45,6 @@ DSIM_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.01_F
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# Make sure the diamond env's python/diamond binaries are on PATH even if
-# the submitting shell's activation state didn't carry through to the job.
-source "$(mamba info --base)/etc/profile.d/conda.sh"
-mamba activate diamond
-
 # ---- 1. download proteomes ----
 if [ ! -f dmel_proteins.fasta ]; then
     wget -O dmel.fasta.gz "$DMEL_PEP_URL"
