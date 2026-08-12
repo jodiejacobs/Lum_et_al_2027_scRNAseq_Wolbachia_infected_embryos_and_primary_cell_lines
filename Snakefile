@@ -4,6 +4,7 @@
 
 import pandas as pd
 import os
+import re
 
 # Configuration
 configfile: "config/config.yaml"
@@ -181,7 +182,7 @@ def get_symbiont_16s_region(sample_id):
         return _SYMBIONT_16S_REGION_CACHE[cache_key]
 
     region = fallback
-    needle = f'"{locus_tag}"'
+    needle = locus_tag
     try:
         with open(gtf) as fh:
             for line in fh:
@@ -190,8 +191,18 @@ def get_symbiont_16s_region(sample_id):
                 fields = line.rstrip("\n").split("\t")
                 if len(fields) < 9:
                     continue
-                if (f'locus_tag "{locus_tag}"' in fields[8]
-                        or f'gene_id "{locus_tag}"' in fields[8]):
+                attrs = fields[8]
+                # NCBI cmsearch/Infernal (Rfam) rRNA features don't carry a
+                # locus_tag attribute at all -- their gene_id/transcript_id
+                # are the locus tag prefixed with "gene-"/"rna-" (e.g.
+                # gene_id "gene-WRI_RS06005" instead of locus_tag
+                # "WRI_RS06005"), so an exact `locus_tag "X"` / `gene_id "X"`
+                # match silently misses them. Match with an optional
+                # gene-/rna- prefix so both annotation styles resolve.
+                if (f'locus_tag "{locus_tag}"' in attrs
+                        or re.search(
+                            rf'(?:gene_id|transcript_id) "(?:gene-|rna-)?{re.escape(locus_tag)}"',
+                            attrs)):
                     region = f"{locus_tag}::{fields[0]}:{fields[3]}-{fields[4]}"
                     break
         if region == fallback:
