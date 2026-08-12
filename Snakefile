@@ -822,6 +822,77 @@ rule extract_abundant_16s:
         echo "Abundant sequence extraction complete"
         """
 
+##################################################################
+# Flysta3D-v2 atlas cell-type label transfer
+##################################################################
+# Runs BEFORE integrate/integrate_uninfected: transfers cell-type labels
+# from the Wang et al. 2025 Cell / Flysta3D-v2 Drosophila embryo atlas
+# (https://db.cngb.org/stomics/flysta3d-v2/) onto every filtered per-sample
+# h5ad in one joint Harmony+KNN run (see docstring in
+# snakemake_scripts/method_comparison/annotate_with_flysta3d.py for why
+# this happens per-sample, before your own condition/timepoint integration,
+# rather than after it).
+#
+# NOT wired into `rule all` / rule integrate's inputs yet -- run it once,
+# inspect the atlas_label_cols candidates it prints (or set
+# atlas_label_cols in config.yaml once you know the atlas obs column
+# names), then repoint rule integrate/integrate_uninfected's `files` input
+# at results/filtered_h5ad_annotated/ instead of results/filtered_h5ad/
+# once you're happy with the transferred labels.
+rule annotate_with_atlas:
+    input:
+        files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        atlas              = config.get("flysta3d_atlas", "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"),
+        flybase_annotation = config["flybase_annotation"],
+    output:
+        annotated = expand("results/filtered_h5ad_annotated/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+    params:
+        script       = config.get("annotate_atlas_script",
+                           "snakemake_scripts/method_comparison/annotate_with_flysta3d.py"),
+        out_dir      = "results/filtered_h5ad_annotated",
+        k            = config.get("atlas_k", 30),
+        n_pcs        = config.get("atlas_n_pcs", 30),
+        harmony_vars = config.get("atlas_harmony_vars", ["dataset", "method"]),
+        # Precomputed as plain strings so the shell block below stays a
+        # straight template -- easier to read/debug than inline conditionals.
+        label_cols_flag = (
+            "--label_cols " + " ".join(config["atlas_label_cols"])
+            if config.get("atlas_label_cols") else ""
+        ),
+        subsample_flag = (
+            f"--subsample_ref {config['atlas_subsample_ref']}"
+            if config.get("atlas_subsample_ref") else ""
+        ),
+    log:
+        "logs/annotate_with_atlas/annotate_with_atlas.log"
+    threads:
+        config.get("annotate_atlas_threads", 16)
+    resources:
+        slurm_partition = config.get("annotate_atlas_partition", "medium"),
+        mem_mb          = config.get("annotate_atlas_mem", 500000),
+        slurm_time      = config.get("annotate_atlas_time", "12:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting Flysta3D-v2 atlas label transfer"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --atlas {input.atlas} \
+            --query {input.files} \
+            --out_dir {params.out_dir} \
+            --flybase_annotation {input.flybase_annotation} \
+            --k {params.k} \
+            --n_pcs {params.n_pcs} \
+            --harmony_vars {params.harmony_vars} \
+            {params.label_cols_flag} \
+            {params.subsample_flag}
+
+        echo "Atlas label transfer complete"
+        """
+
 rule integrate_uninfected:
     input:
         files      = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "wMel" not in s and "wRi" not in s]),

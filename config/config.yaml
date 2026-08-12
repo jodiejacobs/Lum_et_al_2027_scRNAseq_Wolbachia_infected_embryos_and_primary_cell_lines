@@ -180,6 +180,23 @@ integrate_partition: "medium"
 integrate_mem: 128000
 integrate_time: "8:00:00"
 
+# Flysta3D-v2 atlas cell-type label transfer (Wang et al. 2025 Cell,
+# https://db.cngb.org/stomics/flysta3d-v2/). Run annotate_with_atlas once,
+# check the printed candidate obs columns / label distributions in
+# logs/annotate_with_atlas/annotate_with_atlas.log, then fill in
+# atlas_label_cols below with the real column name(s) (e.g. ["cell_type"]).
+annotate_atlas_script: "snakemake_scripts/method_comparison/annotate_with_flysta3d.py"
+flysta3d_atlas: "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"
+atlas_label_cols: []  # e.g. ["cell_type", "tissue"] -- leave empty to just print candidates and stop
+atlas_k: 30
+atlas_n_pcs: 30
+atlas_harmony_vars: ["dataset", "method"]
+atlas_subsample_ref: ""  # e.g. 100000 for a fast first pass; "" = use full atlas
+annotate_atlas_threads: 16
+annotate_atlas_partition: "medium"
+annotate_atlas_mem: 500000   # atlas is large (~12GB h5ad) -- start big, tune down once you've profiled it
+annotate_atlas_time: "12:00:00"
+
 # qc_script: "scripts/method_comparison/qc_plots.py"
 # qc_threads: 4
 # qc_partition: "medium"

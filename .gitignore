@@ -5,6 +5,7 @@ logs/
 snakevision/
 .snakemake/
 /reference/
+resources/*.h5ad
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
