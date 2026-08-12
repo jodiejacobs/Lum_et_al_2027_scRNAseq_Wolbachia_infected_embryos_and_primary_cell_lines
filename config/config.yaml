@@ -126,7 +126,7 @@ cellranger_partition: "medium"  # SLURM partition for cellranger jobs
 pipseeker_threads: 16
 pipseeker_cpus: 16
 pipseeker_mem: 1000000  # MB
-pipseeker_time: "2:00:00"  # HH:MM:SS
+pipseeker_time: "6:00:00"  # HH:MM:SS
 pipseeker_partition: "medium"  # SLURM partition for pipseeker jobs
 
 # Compute resources for combining files

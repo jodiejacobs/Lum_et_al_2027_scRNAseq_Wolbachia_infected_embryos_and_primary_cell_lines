@@ -5,8 +5,15 @@ logs/
 snakevision/
 .snakemake/
 /reference/
+
+
+<<<<<<< HEAD
+resources/
+tmp/
+=======
 resources/*.h5ad
 
+>>>>>>> 7ff01be72d48e92ce12ea84e09791988473c431d
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

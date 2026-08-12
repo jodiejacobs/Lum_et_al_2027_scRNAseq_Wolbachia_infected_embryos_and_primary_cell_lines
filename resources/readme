@@ -1,0 +1,15 @@
+Citation: Wang M, et al. Cell. 2025 Aug 21;188(17):4734–4753.e31. doi:10.1016/j.cell.2025.05.047.
+Database: Flysta3D-v2 (CNGB STOmics DB)
+
+CNSA project accession: CNP0005060 (raw reads)
+STOmics DB project: STT0000069
+Interactive browsers for scRNA-seq, scATAC-seq, and Stereo-seq, plus a 3D viewer
+
+Direct download (processed, annotated .h5ad files — good for label transfer):
+Download page, files hosted at ftp.cngb.org/pub/SciRAID/stomics/STDS0000398/. Relevant for your purposes:
+
+Whole-embryo co-embedded scRNA-seq+scATAC-seq objects, already cell-type annotated: wcoembed_whole_embeding_downsampled_modified.h5ad (12GB), plus germ-layer-split versions (ectoderm/mesoderm/endoderm) and a CNS-specific co-embed
+Per-timepoint embryo scRNA-seq/scStereo-seq objects (E0.0 through E20.54, .h5ad)
+ATAC-only whole-embedding and CNS objects if you need chromatin accessibility too
+
+These are standard AnnData objects with cell type labels in .obs, so you can load them with scanpy and do label transfer (e.g., scanpy.tl.ingest, or Seurat's TransferData if you convert) onto your Wolbachia-infected embryo/cell-line scRNA-seq.
