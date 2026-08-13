@@ -44,14 +44,18 @@ parser.add_argument("--n_pcs_scrublet",     type=int, default=20,
 parser.add_argument("--host_rrna_genes", type=str, default=None,
                     help="Text file, one host (Drosophila) rRNA gene id per "
                          "line -- generate with "
-                         "snakemake_scripts/reference/find_rrna_genes.py "
-                         "against that sample's host GTF. If omitted, "
-                         "Wolbachia titer is not calculated.")
+                         "snakemake_scripts/reference/find_host_rrna_genes.py "
+                         "against that sample's host GTF. Currently UNUSED: "
+                         "wolbachia_titer is a stopgap raw symbiont rRNA "
+                         "count, not normalized against host rRNA (see "
+                         "calculate_wolbachia_titer docstring). Kept as a "
+                         "CLI arg so it's ready when normalization is "
+                         "revisited.")
 parser.add_argument("--symbiont_rrna_genes", type=str, default=None,
                     help="Text file, one Wolbachia rRNA gene id per line -- "
                          "generate with find_rrna_genes.py against that "
                          "sample's Wolbachia GTF. If omitted, Wolbachia "
-                         "titer is not calculated.")
+                         "titer is set to 0.")
 
 args   = parser.parse_args()
 input  = args.input
@@ -144,27 +148,35 @@ sc.settings.set_figure_params(dpi=300, dpi_save=300, figsize=(2, 2), fontsize=6)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
-    """Vectorised titer calculation using sparse matrix slicing.
+    """STOPGAP: wolbachia_titer = total symbiont (Wolbachia) rRNA transcript
+    counts per cell -- NOT normalized against host rRNA.
 
-    titer = symbiont rRNA reads / (symbiont + host rRNA reads)
+    This used to be a true ratio, symbiont / (symbiont + host) rRNA reads,
+    but host rRNA gene lists aren't available/annotated for every host
+    genome (e.g. Dsim's FlyBase r2.02 annotation has no rRNA genes at all,
+    which made the ratio collapse to ~1.0 for any cell with symbiont rRNA
+    reads -- a misleading presence/absence flag, not a real titer). Until
+    there's a normalization strategy that works across all host genomes,
+    this just reports raw symbiont rRNA counts per cell.
 
-    host_rrna_genes / symbiont_rrna_genes are resolved per-genome by
-    find_rrna_genes.py (scans the actual GTF for rRNA-annotated features)
-    rather than hardcoded, so this works for any host species x Wolbachia
-    strain combo instead of only Dmel + wMel.
+    host_rrna_genes is accepted but unused -- kept in the signature/CLI so
+    callers don't need to change when normalization is revisited.
+
+    symbiont_rrna_genes is resolved per-strain by find_rrna_genes.py (scans
+    the actual GTF for rRNA-annotated features) rather than hardcoded, so
+    this works for any Wolbachia strain instead of only wMel.
     """
-    print("Calculating Wolbachia titer …")
+    print("Calculating Wolbachia titer (STOPGAP: raw symbiont rRNA counts, "
+          "not normalized against host) …")
 
-    if not host_rrna_genes and not symbiont_rrna_genes:
-        print("  No rRNA gene lists supplied (--host_rrna_genes / "
-              "--symbiont_rrna_genes) -- setting wolbachia_titer to 0")
+    if not symbiont_rrna_genes:
+        print("  No symbiont rRNA gene list supplied (--symbiont_rrna_genes) "
+              "-- setting wolbachia_titer to 0")
         adata.obs['wolbachia_titer'] = np.zeros(adata.n_obs, dtype=np.float32)
         return adata
 
     var_names = list(adata.var_names)
-
     symbiont_present = [g for g in symbiont_rrna_genes if g in var_names]
-    host_present      = [g for g in host_rrna_genes      if g in var_names]
 
     def _sum_genes(gene_list):
         if not gene_list:
@@ -176,17 +188,11 @@ def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
         return X.sum(axis=1).astype(np.float32)
 
     symbiont_total = _sum_genes(symbiont_present)
-    host_total     = _sum_genes(host_present)
 
-    denom = symbiont_total + host_total
-    # Where denominator is 0 (no rRNA detected), titer = 0
-    titer = np.where(denom > 0, symbiont_total / denom, 0.0)
-
-    adata.obs['wolbachia_titer'] = titer
-    print(f"  Mean: {titer.mean():.4f}  Median: {np.median(titer):.4f}  "
+    adata.obs['wolbachia_titer'] = symbiont_total
+    print(f"  Mean: {symbiont_total.mean():.4f}  Median: {np.median(symbiont_total):.4f}  "
           f"Symbiont rRNA genes present: {symbiont_present} "
-          f"({len(symbiont_present)}/{len(symbiont_rrna_genes)})  "
-          f"Host rRNA genes present: {len(host_present)}/{len(host_rrna_genes)}")
+          f"({len(symbiont_present)}/{len(symbiont_rrna_genes)})")
     return adata
 
 
