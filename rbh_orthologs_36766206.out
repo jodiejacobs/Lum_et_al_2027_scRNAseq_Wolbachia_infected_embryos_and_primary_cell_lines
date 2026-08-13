@@ -1,0 +1,245 @@
+Thu Aug 13 12:08:26 PM PDT 2026
+phoenix-11.prism
+/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines
+[/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-r6.68.gtf] 35736 transcript_id -> gene_id pairs (from 531707 attribute rows carrying both fields)
+[/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/GCF_016746395.2_Prin_Dsim_3.1.gtf] 28790 transcript_id -> gene_id pairs (from 427044 attribute rows carrying both fields)
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 16
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Database input file: dmel_proteins.fasta
+Opening the database file...  [0.113s]
+Loading sequences...  [0.549s]
+Masking sequences...  [0.196s]
+Writing sequences...  [0.023s]
+Hashing sequences...  [0.006s]
+Loading sequences...  [0.002s]
+Writing trailer...  [0.002s]
+Closing the input file...  [0s]
+Closing the database file...  [0s]
+
+Database sequences  30836
+  Database letters  20394982
+     Database hash  c4e2b29fc953bbcf62cfe85f252ab2fe
+        Total time  0.892000s
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 16
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Database input file: dsim_proteins.fasta
+Opening the database file...  [0.268s]
+Loading sequences...  [0.199s]
+Masking sequences...  [0.184s]
+Writing sequences...  [0.022s]
+Hashing sequences...  [0.007s]
+Loading sequences...  [0.001s]
+Writing trailer...  [0.001s]
+Closing the input file...  [0s]
+Closing the database file...  [0s]
+
+Database sequences  24119
+  Database letters  16462087
+     Database hash  2e3d09a0d9afd24781bd577755be5374
+        Total time  0.685000s
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 16
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Temporary directory: 
+#Target sequences to report alignments for: 1
+Opening the database...  [0s]
+Database: dmel_db (type: Diamond database, sequences: 30836, letters: 20394982, build version: 185)
+Block size = 2000000000
+Opening the input file...  [0s]
+Opening the output file...  [0.398s]
+Loading query sequences...  [0.06s]
+Loaded 27421807 bytes from disk at 435.967 MB/s
+Masking queries...  [0.192s]
+Masked letters:   tantan: 1071362  seg: 0  motif: 0
+Algorithm: Double-indexed
+Building query histograms...  [0.219s]
+Seeking in database...  [0s]
+Loading reference sequences...  [0.065s]
+Masking reference...  [0.194s]
+Masked letters:   tantan: 1557121  seg: 0  motif: 0
+Initializing temporary storage...  [0.047s]
+Building reference histograms...  [0.23s]
+Allocating buffers...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 1/4.
+Building reference seed array...  [0.069s]
+Building query seed array...  [0.063s]
+Computing hash join...  [0.059s]
+Masking low complexity seeds...  [0.012s]
+Searching alignments...  [1.036s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 2/4.
+Building reference seed array...  [0.086s]
+Building query seed array...  [0.096s]
+Computing hash join...  [0.024s]
+Masking low complexity seeds...  [0.01s]
+Searching alignments...  [0.61s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 3/4.
+Building reference seed array...  [0.127s]
+Building query seed array...  [0.106s]
+Computing hash join...  [0.028s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.537s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 4/4.
+Building reference seed array...  [0.128s]
+Building query seed array...  [0.106s]
+Computing hash join...  [0.035s]
+Masking low complexity seeds...  [0.014s]
+Searching alignments...  [0.483s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 1/4.
+Building reference seed array...  [0.105s]
+Building query seed array...  [0.088s]
+Computing hash join...  [0.026s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.639s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 2/4.
+Building reference seed array...  [0.082s]
+Building query seed array...  [0.058s]
+Computing hash join...  [0.022s]
+Masking low complexity seeds...  [0.01s]
+Searching alignments...  [0.485s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 3/4.
+Building reference seed array...  [0.102s]
+Building query seed array...  [0.057s]
+Computing hash join...  [0.023s]
+Masking low complexity seeds...  [0.01s]
+Searching alignments...  [0.572s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 4/4.
+Building reference seed array...  [0.121s]
+Building query seed array...  [0.099s]
+Computing hash join...  [0.024s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.511s]
+Deallocating memory...  [0s]
+Deallocating buffers...  [0.006s]
+Clearing query masking...  [0.003s]
+Computing alignments...  [9.921s]
+Deallocating reference...  [0.003s]
+Loading reference sequences...  [0s]
+Deallocating buffers...  [0s]
+Deallocating queries...  [0.001s]
+Loading query sequences...  [0.002s]
+Closing the input file...  [0s]
+Closing the output file...  [0s]
+Closing the database...  [0s]
+Cleaning up...  [0s]
+Total time = 18.276s
+Reported 23628 pairwise alignments, 23628 HSPs.
+23628 queries aligned.
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 16
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Temporary directory: 
+#Target sequences to report alignments for: 1
+Opening the database...  [0.001s]
+Database: dsim_db (type: Diamond database, sequences: 24119, letters: 16462087, build version: 185)
+Block size = 2000000000
+Opening the input file...  [0s]
+Opening the output file...  [0.028s]
+Loading query sequences...  [0.052s]
+Loaded 33793394 bytes from disk at 613.024 MB/s
+Masking queries...  [0.175s]
+Masked letters:   tantan: 1557121  seg: 0  motif: 0
+Algorithm: Double-indexed
+Building query histograms...  [0.246s]
+Seeking in database...  [0s]
+Loading reference sequences...  [0.056s]
+Masking reference...  [0.14s]
+Masked letters:   tantan: 1071362  seg: 0  motif: 0
+Initializing temporary storage...  [0.031s]
+Building reference histograms...  [0.196s]
+Allocating buffers...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 1/4.
+Building reference seed array...  [0.093s]
+Building query seed array...  [0.066s]
+Computing hash join...  [0.059s]
+Masking low complexity seeds...  [0.013s]
+Searching alignments...  [0.841s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 2/4.
+Building reference seed array...  [0.09s]
+Building query seed array...  [0.109s]
+Computing hash join...  [0.037s]
+Masking low complexity seeds...  [0.012s]
+Searching alignments...  [0.584s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 3/4.
+Building reference seed array...  [0.098s]
+Building query seed array...  [0.085s]
+Computing hash join...  [0.025s]
+Masking low complexity seeds...  [0.01s]
+Searching alignments...  [0.57s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 1/2, index chunk 4/4.
+Building reference seed array...  [0.089s]
+Building query seed array...  [0.103s]
+Computing hash join...  [0.023s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.528s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 1/4.
+Building reference seed array...  [0.099s]
+Building query seed array...  [0.118s]
+Computing hash join...  [0.03s]
+Masking low complexity seeds...  [0.012s]
+Searching alignments...  [0.727s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 2/4.
+Building reference seed array...  [0.101s]
+Building query seed array...  [0.118s]
+Computing hash join...  [0.029s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.704s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 3/4.
+Building reference seed array...  [0.098s]
+Building query seed array...  [0.102s]
+Computing hash join...  [0.028s]
+Masking low complexity seeds...  [0.012s]
+Searching alignments...  [0.551s]
+Deallocating memory...  [0s]
+Processing query block 1, reference block 1/1, shape 2/2, index chunk 4/4.
+Building reference seed array...  [0.099s]
+Building query seed array...  [0.105s]
+Computing hash join...  [0.027s]
+Masking low complexity seeds...  [0.011s]
+Searching alignments...  [0.571s]
+Deallocating memory...  [0s]
+Deallocating buffers...  [0.007s]
+Clearing query masking...  [0.003s]
+Computing alignments...  [20.476s]
+Deallocating reference...  [0.002s]
+Loading reference sequences...  [0s]
+Deallocating buffers...  [0s]
+Deallocating queries...  [0s]
+Loading query sequences...  [0.002s]
+Closing the input file...  [0.003s]
+Closing the output file...  [0s]
+Closing the database...  [0.002s]
+Cleaning up...  [0s]
+Total time = 28.542s
+Reported 30450 pairwise alignments, 30450 HSPs.
+30450 queries aligned.
+Genes in A: 23628, genes in B: 30450, reciprocal best-hit gene pairs: 16783
+Done. Genome-wide ortholog table: /private/groups/russelllab/jodie/scRNAseq/reference/orthologs/dmel_dsim_orthologs_rbh.tsv
+Columns: Dsim(gene_id) Dmel(gene_id) pident evalue bitscore
+Thu Aug 13 12:10:25 PM PDT 2026
