@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+NOTE: only usable when you actually have a FlyBase translation FASTA for
+both species (headers with a `parent=FBgn...` field). run_rbh_orthologs.sbatch
+now builds proteins from genome FASTA + GTF via gffread instead (D. simulans
+moved to an NCBI RefSeq/Gnomon annotation with no such FASTA or header
+convention), and uses gtf_id_map.py for id mapping in that case. Keep this
+script around for the pure-FlyBase-translation-FASTA case only.
+
 Build a protein_id -> gene_id map from a FlyBase-style translation FASTA.
 
 FlyBase protein FASTA headers look like:

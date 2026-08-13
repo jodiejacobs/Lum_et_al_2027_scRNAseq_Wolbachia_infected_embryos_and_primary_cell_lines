@@ -102,10 +102,12 @@ swap_gene_id_script:    "snakemake_scripts/reference/swap_gene_id_to_symbol.py"
 find_rrna_genes_script: "snakemake_scripts/reference/find_rrna_genes.py"
 find_host_rrna_genes_script: "snakemake_scripts/reference/find_host_rrna_genes.py"
 
-# Dsim -> Dmel FlyBase gene ID orthologs (reciprocal best hit), used by the
-# integrate script to translate Dsim samples' adata.var gene IDs onto the
-# corresponding Dmel FlyBase ID so Dsim and Dmel samples integrate gene-for-
-# gene. Columns: Dsim, Dmel, pident, evalue, bitscore.
+# Dsim -> Dmel orthologs (reciprocal best hit), used by the integrate script
+# to translate Dsim samples' adata.var gene IDs onto the corresponding Dmel
+# FlyBase ID so Dsim and Dmel samples integrate gene-for-gene. Dsim gene IDs
+# are NCBI/Gnomon IDs (GCF_016746395.2 Prin_Dsim_3.1, e.g. "LOC120284240"),
+# not FlyBase FBgn -- Dmel gene IDs are still FlyBase FBgn.
+# Columns: Dsim, Dmel, pident, evalue, bitscore.
 ortholog_map: "/private/groups/russelllab/jodie/scRNAseq/reference/orthologs/dmel_dsim_orthologs_rbh.tsv"
 
 # Software paths

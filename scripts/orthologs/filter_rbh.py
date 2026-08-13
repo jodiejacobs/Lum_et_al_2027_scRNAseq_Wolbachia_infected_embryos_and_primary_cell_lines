@@ -15,8 +15,10 @@ Usage:
     python filter_rbh.py \\
         dsim_vs_dmel.tsv dmel_vs_dsim.tsv \\
         dsim_id_map.tsv dmel_id_map.tsv \\
+        [--name-a Dsim --name-b Dmel] \\
         > dmel_dsim_orthologs_rbh.tsv
 """
+import argparse
 import csv
 import sys
 
@@ -47,23 +49,28 @@ def load_best_hits_by_gene(path, query_map, subject_map):
 
 
 def main():
-    if len(sys.argv) != 5:
-        sys.exit(
-            f"Usage: {sys.argv[0]} A_vs_B.tsv B_vs_A.tsv A_id_map.tsv B_id_map.tsv"
-        )
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("a_vs_b", help="A-query-vs-B-db best-hit table (protein/transcript-level)")
+    ap.add_argument("b_vs_a", help="B-query-vs-A-db best-hit table (protein/transcript-level)")
+    ap.add_argument("a_map", help="A protein/transcript_id -> gene_id map")
+    ap.add_argument("b_map", help="B protein/transcript_id -> gene_id map")
+    ap.add_argument("--name-a", default="geneA",
+                     help="output column name for the A-side gene ID (default: geneA)")
+    ap.add_argument("--name-b", default="geneB",
+                     help="output column name for the B-side gene ID (default: geneB)")
+    args = ap.parse_args()
 
-    a_vs_b_path, b_vs_a_path, a_map_path, b_map_path = sys.argv[1:5]
-
-    a_map = load_id_map(a_map_path)  # e.g. dsim protein -> dsim gene
-    b_map = load_id_map(b_map_path)  # e.g. dmel protein -> dmel gene
+    a_map = load_id_map(args.a_map)  # e.g. dsim protein/transcript -> dsim gene
+    b_map = load_id_map(args.b_map)  # e.g. dmel protein/transcript -> dmel gene
 
     # A queries against B database
-    a_vs_b = load_best_hits_by_gene(a_vs_b_path, query_map=a_map, subject_map=b_map)
+    a_vs_b = load_best_hits_by_gene(args.a_vs_b, query_map=a_map, subject_map=b_map)
     # B queries against A database
-    b_vs_a = load_best_hits_by_gene(b_vs_a_path, query_map=b_map, subject_map=a_map)
+    b_vs_a = load_best_hits_by_gene(args.b_vs_a, query_map=b_map, subject_map=a_map)
 
     writer = csv.writer(sys.stdout, delimiter="\t")
-    writer.writerow(["geneA", "geneB", "pident", "evalue", "bitscore"])
+    writer.writerow([args.name_a, args.name_b, "pident", "evalue", "bitscore"])
 
     n_rbh = 0
     for gene_a, (gene_b, bitscore, pident, evalue) in a_vs_b.items():

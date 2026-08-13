@@ -17,18 +17,29 @@
 # a bulk orthologs file (OrthoDB calls moved to a live API in 2022)
 # and DIOPT doesn't cover D. simulans.
 #
-# Requires: get_id_map.py and filter_rbh.py in the same directory.
+# Built directly from each species' genome FASTA + GTF (protein
+# sequences extracted locally with gffread) rather than a pre-built
+# FlyBase translation FASTA. This is required now that the D. simulans
+# annotation comes from NCBI RefSeq (Prin_Dsim_3.1, GCF_016746395.2,
+# Gnomon gene models with "LOC#####"/accession-style gene IDs) instead
+# of FlyBase, which no longer maintains D. simulans sequence/annotation
+# at all -- there is no FlyBase-style translation FASTA to download for
+# it anymore. D. melanogaster still comes from FlyBase, but is handled
+# the same way here for a consistent gffread-based extraction step on
+# both sides.
+#
+# Requires: gtf_id_map.py and filter_rbh.py in the same directory.
 #
 # Before running:
 #   1. Set WORKDIR below.
-#   2. Set DMEL_PEP_URL / DSIM_PEP_URL to the FlyBase translation FASTA
-#      URLs for the releases you're actually using (check
-#      https://flybase.org/downloads/bulkdata for current dmel release,
-#      and https://flybase.org/genomes/Drosophila_simulans/ for dsim
-#      r2.01 — do NOT use the r1.0 GLEAN release, it has no standard
-#      gene models).
-#   3. mamba env with diamond installed, e.g.:
-#        mamba create -n diamond -c bioconda -c conda-forge diamond
+#   2. Set DMEL_FASTA/DMEL_GTF/DSIM_FASTA/DSIM_GTF to your genome FASTA +
+#      GTF pairs (whole-genome/chromosome FASTA, NOT a translation/
+#      protein FASTA -- proteins are extracted from these with gffread).
+#   3. mamba envs:
+#        - KALLISTO_ENV below (this repo's existing kallisto_bustools
+#          env) must have gffread on PATH.
+#        - DIAMOND_ENV below, e.g.:
+#            mamba create -n diamond -c bioconda -c conda-forge diamond
 #   4. Adjust #SBATCH resources to your cluster's partition limits.
 
 set -euo pipefail
@@ -37,29 +48,45 @@ set -euo pipefail
 date; hostname; pwd
 
 WORKDIR=/private/groups/russelllab/jodie/scRNAseq/reference/orthologs
-SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/scripts/orthologs  # where get_id_map.py / filter_rbh.py live
+SCRIPT_DIR=/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/scripts/orthologs  # where gtf_id_map.py / filter_rbh.py live
 
-DMEL_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_melanogaster/dmel_r6.68_FB2026_02/fasta/dmel-all-translation-r6.68.fasta.gz"
-DSIM_PEP_URL="https://s3ftp.flybase.org/genomes/Drosophila_simulans/dsim_r2.01_FB2015_01/fasta/dsim-all-translation-r2.01.fasta.gz"
+DMEL_FASTA=/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-chromosome-r6.68.fasta
+DMEL_GTF=/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-r6.68.gtf
+
+DSIM_FASTA=/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/GCF_016746395.2_Prin_Dsim_3.1_genomic.fna
+DSIM_GTF=/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/GCF_016746395.2_Prin_Dsim_3.1.gtf
+
+KALLISTO_ENV=kallisto_bustools   # provides gffread
+DIAMOND_ENV=diamond              # provides diamond
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# ---- 1. download proteomes ----
+source "$(dirname "$(dirname "$(which conda)")")/etc/profile.d/conda.sh"
+
+# ---- 1. extract protein sequences from genome + GTF (gffread -y) ----
+conda activate "$KALLISTO_ENV"
+
 if [ ! -f dmel_proteins.fasta ]; then
-    wget -O dmel.fasta.gz "$DMEL_PEP_URL"
-    gunzip -c dmel.fasta.gz > dmel_proteins.fasta
+    gffread "$DMEL_GTF" -g "$DMEL_FASTA" -y dmel_proteins.fasta
 fi
 if [ ! -f dsim_proteins.fasta ]; then
-    wget -O dsim.fasta.gz "$DSIM_PEP_URL"
-    gunzip -c dsim.fasta.gz > dsim_proteins.fasta
+    gffread "$DSIM_GTF" -g "$DSIM_FASTA" -y dsim_proteins.fasta
 fi
 
-# ---- 2. protein_id -> gene_id maps ----
-python "$SCRIPT_DIR/get_id_map.py" dmel_proteins.fasta > dmel_id_map.tsv
-python "$SCRIPT_DIR/get_id_map.py" dsim_proteins.fasta > dsim_id_map.tsv
+# ---- 2. transcript_id -> gene_id maps, parsed straight from each GTF ----
+# (not from FASTA headers -- the NCBI GTF has no FlyBase-style
+# parent=FBgn convention to parse, so gtf_id_map.py reads gene_id/
+# transcript_id out of the GTF attribute column directly, which works
+# for both the FlyBase dmel GTF and the NCBI/Gnomon dsim GTF.)
+python "$SCRIPT_DIR/gtf_id_map.py" "$DMEL_GTF" > dmel_id_map.tsv
+python "$SCRIPT_DIR/gtf_id_map.py" "$DSIM_GTF" > dsim_id_map.tsv
+
+conda deactivate
 
 # ---- 3. build diamond DBs ----
+conda activate "$DIAMOND_ENV"
+
 diamond makedb --in dmel_proteins.fasta -d dmel_db --threads "$SLURM_CPUS_PER_TASK"
 diamond makedb --in dsim_proteins.fasta -d dsim_db --threads "$SLURM_CPUS_PER_TASK"
 
@@ -74,13 +101,22 @@ diamond blastp -q dmel_proteins.fasta -d dsim_db -o dmel_vs_dsim.tsv \
     --outfmt 6 qseqid sseqid pident length evalue bitscore \
     --threads "$SLURM_CPUS_PER_TASK"
 
+conda deactivate
+
 # ---- 5. collapse to gene-level reciprocal best hits ----
+# --name-a/--name-b: match the "Dsim"/"Dmel" column names config.yaml's
+# ortholog_map and integrate_v2.py's load_ortholog_map() expect.
+conda activate "$KALLISTO_ENV"   # just needs a stdlib-only python3
+
 python "$SCRIPT_DIR/filter_rbh.py" \
     dsim_vs_dmel.tsv dmel_vs_dsim.tsv \
     dsim_id_map.tsv dmel_id_map.tsv \
+    --name-a Dsim --name-b Dmel \
     > dmel_dsim_orthologs_rbh.tsv
 
+conda deactivate
+
 echo "Done. Genome-wide ortholog table: $WORKDIR/dmel_dsim_orthologs_rbh.tsv"
-echo "Columns: geneA(dsim) geneB(dmel) pident evalue bitscore"
+echo "Columns: Dsim(gene_id) Dmel(gene_id) pident evalue bitscore"
 
 date

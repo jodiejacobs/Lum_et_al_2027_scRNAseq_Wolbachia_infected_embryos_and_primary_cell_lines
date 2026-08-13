@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Find rRNA genes in a genome annotation (GTF or GTF-like GFF) and print
-their gene IDs, one per line.
+"""Find rRNA genes in a genome annotation (GTF or GFF3) and print their gene
+IDs, one per line.
 
 Replaces hardcoding a fixed rRNA gene list per species/Wolbachia strain:
-run this against whatever GTF a genome build actually uses and it finds
-the rRNA-annotated genes in that file.
+run this against whatever GTF/GFF3 a genome build actually uses and it
+finds the rRNA-annotated genes in that file.
 
 Works on:
   - FlyBase-style GTF (host species): feature type "rRNA" in column 3,
@@ -12,21 +12,35 @@ Works on:
     swap_gene_id_to_symbol.py has been run).
   - NCBI/Prokka-style bacterial GTF (Wolbachia): feature type "rRNA" in
     column 3, or `gbkey`/`gene_biotype` attribute == "rRNA", gene id in
-    `gene`, `gene_id`, or `locus_tag`.
+    `locus_tag`, `gene`, or `gene_id`.
+  - NCBI GFF3 (e.g. genomic.gff / genomic.fixed.gff): same feature-type/
+    gbkey rules, but attributes are unquoted `key=value;key=value` instead
+    of GTF's quoted `key "value";` -- both are parsed automatically.
+    Some derived/converted GTFs (e.g. AGAT output) drop gbkey/gene_biotype
+    and locus_tag entirely for non-coding features, so if a strain's own
+    .gtf comes up empty, try running this against its source GFF3 instead.
 
 Usage:
     find_rrna_genes.py annotation.gtf > rrna_genes.txt
-    find_rrna_genes.py annotation.gtf --id-attr locus_tag
+    find_rrna_genes.py genomic.gff --id-attr locus_tag > rrna_genes.txt
 """
 import argparse
 import re
 import sys
 
-ATTR_RE = re.compile(r'(\S+)\s+"([^"]*)"')
+GTF_ATTR_RE  = re.compile(r'(\S+)\s+"([^"]*)"')
+GFF3_ATTR_RE = re.compile(r'([^=;\s]+)=([^;]*)')
 
 
 def parse_attrs(field: str) -> dict:
-    return dict(ATTR_RE.findall(field))
+    """Parse a GTF attribute string ('key "value"; key "value";') or a
+    GFF3 one ('key=value;key=value') -- tries GTF-style first since GFF3
+    values could in principle contain a stray quoted substring, then falls
+    back to GFF3-style if that finds nothing."""
+    pairs = GTF_ATTR_RE.findall(field)
+    if pairs:
+        return dict(pairs)
+    return dict(GFF3_ATTR_RE.findall(field))
 
 
 def main() -> None:
@@ -34,7 +48,7 @@ def main() -> None:
     ap.add_argument("gtf")
     ap.add_argument("--id-attr", default=None,
                      help="attribute to use as the gene id "
-                          "(default: try gene, then gene_id, then locus_tag)")
+                          "(default: try locus_tag, then gene, then gene_id)")
     args = ap.parse_args()
 
     ids = []
@@ -62,7 +76,7 @@ def main() -> None:
             if args.id_attr:
                 gid = attrs.get(args.id_attr)
             else:
-                gid = attrs.get("gene") or attrs.get("gene_id") or attrs.get("locus_tag")
+                gid = attrs.get("locus_tag") or attrs.get("gene") or attrs.get("gene_id")
 
             if gid and gid not in seen:
                 seen.add(gid)
