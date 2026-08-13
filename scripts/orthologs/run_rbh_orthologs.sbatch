@@ -67,11 +67,24 @@ source "$(dirname "$(dirname "$(which conda)")")/etc/profile.d/conda.sh"
 # ---- 1. extract protein sequences from genome + GTF (gffread -y) ----
 conda activate "$KALLISTO_ENV"
 
+# NCBI RefSeq/Gnomon GTFs (like the dsim GCF_016746395.2 one) carry
+# gene-level rows with a literal, empty transcript_id "" attribute
+# (rather than omitting transcript_id entirely, as FlyBase GTFs do).
+# gffread's parser tries to use that as the record's ID, gets an empty
+# string, and dies with "Error: no valid ID found for GFF record" --
+# a known gffread/NCBI-GTF issue, not specific to this pipeline. Strip
+# those rows before handing the GTF to gffread (harmless no-op on GTFs
+# that don't have any, like FlyBase's, so applied to both defensively).
+# gtf_id_map.py doesn't need this filtering -- it already skips rows
+# with an empty transcript_id on its own.
+grep -v 'transcript_id ""' "$DMEL_GTF" > dmel_filtered.gtf
+grep -v 'transcript_id ""' "$DSIM_GTF" > dsim_filtered.gtf
+
 if [ ! -f dmel_proteins.fasta ]; then
-    gffread "$DMEL_GTF" -g "$DMEL_FASTA" -y dmel_proteins.fasta
+    gffread dmel_filtered.gtf -g "$DMEL_FASTA" -y dmel_proteins.fasta
 fi
 if [ ! -f dsim_proteins.fasta ]; then
-    gffread "$DSIM_GTF" -g "$DSIM_FASTA" -y dsim_proteins.fasta
+    gffread dsim_filtered.gtf -g "$DSIM_FASTA" -y dsim_proteins.fasta
 fi
 
 # ---- 2. transcript_id -> gene_id maps, parsed straight from each GTF ----

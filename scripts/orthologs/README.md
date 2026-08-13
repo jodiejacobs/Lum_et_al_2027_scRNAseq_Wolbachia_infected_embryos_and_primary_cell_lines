@@ -36,7 +36,14 @@ proteome being available for *D. simulans*.
 ## Method
 
 1. Extract protein sequences directly from each species' genome FASTA +
-   GTF with `gffread -y` (one protein per transcript with a CDS):
+   GTF with `gffread -y` (one protein per transcript with a CDS). The
+   GTF is first passed through `grep -v 'transcript_id ""'` -- NCBI
+   RefSeq/Gnomon GTFs (the dsim one) include gene-level rows with a
+   literal empty `transcript_id ""` attribute rather than omitting it
+   like FlyBase does, which otherwise crashes gffread with `Error: no
+   valid ID found for GFF record` (a known gffread/NCBI-GTF interaction,
+   see [biostars.org/p/9544248](https://www.biostars.org/p/9544248/)).
+   Applied to both GTFs; it's a no-op on FlyBase's:
    - *D. melanogaster*: FlyBase r6.68 (`dmel-all-chromosome-r6.68.fasta`
      / `dmel-all-r6.68.gtf`)
    - *D. simulans*: NCBI RefSeq Prin_Dsim_3.1, `GCF_016746395.2`
