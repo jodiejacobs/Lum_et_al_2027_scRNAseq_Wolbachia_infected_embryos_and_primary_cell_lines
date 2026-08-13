@@ -5,9 +5,9 @@
 #SBATCH --output=rbh_orthologs_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=32gb
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=64gb
+#SBATCH --time=06:00:00
 #SBATCH --partition=medium
 # Optional: uncomment and set if you belong to multiple Slurm accounts
 # #SBATCH --account=<GROUP>

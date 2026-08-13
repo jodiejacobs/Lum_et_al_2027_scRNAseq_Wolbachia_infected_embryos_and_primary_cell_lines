@@ -86,14 +86,14 @@ host_genome:
          gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/dwil-all-r1.04.gtf"}
 
 wolbachia_genome:
-  wMel:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/GCF_016584425.1_ASM1658442v1_genomic.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/wMel_GCF_016584425.1.gtf"}
-  wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/GCF_000022285.1_ASM2228v1_genomic.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/wRi_Riv84_GCF_000022285.1.gtf"}
-  wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/20260402_wRi_M23_pilon.fasta",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/wRi_M23_v3.gtf"}
-  wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/wWil_GCF_040084705.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/wWil_GCF_040084705.1.gtf"}
+  wMel:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1.gtf"}
+  wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1.gtf"}
+  wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_GCA_979474595.1.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_v3.gtf"}
+  wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12.gtf"}
 
 sixteen_s_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S/highly_represented_16S_filtered.renamed.fasta"
 sixteen_s_gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/16S_fixed.gtf"
