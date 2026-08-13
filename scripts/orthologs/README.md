@@ -42,11 +42,19 @@ proteome being available for *D. simulans*.
    - *D. simulans*: NCBI RefSeq Prin_Dsim_3.1, `GCF_016746395.2`
      (`GCF_016746395.2_Prin_Dsim_3.1_genomic.fna` /
      `GCF_016746395.2_Prin_Dsim_3.1.gtf`)
-2. Map each transcript ID (gffread's protein FASTA header) to its
-   gene ID by reading `gene_id`/`transcript_id` straight out of the GTF
+2. Map each gffread protein FASTA header to its gene ID by reading
+   `gene_id`/`transcript_id`/`protein_id` straight out of the GTF
    attribute column (`gtf_id_map.py`). This is generic GTF parsing, not
    FlyBase-header parsing, so it works the same way on the FlyBase dmel
    GTF and the NCBI/Gnomon dsim GTF.
+   **Important:** `gffread -y` writes `protein_id` (not `transcript_id`)
+   as the FASTA header whenever the GTF's CDS rows carry one -- true for
+   both FlyBase (`protein_id "FBpp######"`) and NCBI/Gnomon
+   (`protein_id "XP_######"`) GTFs. `gtf_id_map.py` maps both
+   `protein_id` and `transcript_id` to `gene_id` so the lookup resolves
+   either way; mapping transcript_id alone would let raw FBpp/XP_
+   accessions leak through into the final `Dsim`/`Dmel` gene_id columns
+   instead of FBgn/LOC gene IDs.
 3. Build DIAMOND databases for both proteomes and run `blastp` in
    both directions (dsim→dmel and dmel→dsim), keeping only the single
    best hit per query protein.
@@ -70,7 +78,7 @@ same ID namespace as this table's `Dsim` column.
 | File | Purpose |
 |---|---|
 | `run_rbh_orthologs.sbatch` | SLURM pipeline: gffread protein extraction, DIAMOND makedb, reciprocal blastp, RBH filtering |
-| `gtf_id_map.py` | Extracts transcript_id → gene_id from any GTF's attribute column (FlyBase or NCBI/Gnomon) |
+| `gtf_id_map.py` | Extracts protein_id/transcript_id → gene_id from any GTF's attribute column (FlyBase or NCBI/Gnomon) |
 | `get_id_map.py` | Legacy: extracts protein_id → FBgn from a FlyBase translation FASTA header (`parent=FBgn...`) — only usable if you have that kind of FASTA for both species |
 | `filter_rbh.py` | Collapses two one-directional best-hit tables into gene-level reciprocal best hits |
 | `README.md` | This file |
