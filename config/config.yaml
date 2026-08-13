@@ -38,14 +38,14 @@ Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_willi
 # that strain's source GTF.
 host_rrna_genes:
   Dmel: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/kallisto_ref/host_rrna_genes.txt"
-  Dsim: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_simulans/kallisto_ref/host_rrna_genes.txt"
+  Dsim: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/kallisto_ref/host_rrna_genes.txt"
   Dwil: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/kallisto_ref/host_rrna_genes.txt"
 
 symbiont_rrna_genes:
-  wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/rrna_genes.txt"
-  wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/rrna_genes.txt"
-  wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/rrna_genes.txt"
-  wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/rrna_genes.txt"
+  wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/rrna_genes.txt"
+  wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/rrna_genes.txt"
+  wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/rrna_genes.txt"
+  wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/rrna_genes.txt"
 
 # Single 16S rRNA gene (locus_tag) per Wolbachia strain, used by the
 # count_16s_reads rule to quantify 16S rRNA reads via read alignment
