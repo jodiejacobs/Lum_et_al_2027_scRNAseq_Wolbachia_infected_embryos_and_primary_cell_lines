@@ -47,7 +47,11 @@ host_rrna_genes:
 
 symbiont_rrna_genes:
   wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/rrna_genes.txt"
+<<<<<<< HEAD
   wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/rrna_genes.txt"
+=======
+  wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/rrna_genes.txt"
+>>>>>>> 68fa2593bce9f976e8ca42f5eb98ebd18b523242
   wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/rrna_genes.txt"
   wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/rrna_genes.txt"
 
@@ -94,8 +98,13 @@ wolbachia_genome:
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1.gtf"}
   wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1_genomic.fna",
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1.gtf"}
+<<<<<<< HEAD
   wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/20260402_wRi_M23_pilon.fasta",
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/wRi_M23_v3.fixed.gtf"}
+=======
+  wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_GCA_979474595.1.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_v3.gtf"}
+>>>>>>> 68fa2593bce9f976e8ca42f5eb98ebd18b523242
   wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12_genomic.fna",
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12.gtf"}
 
