@@ -111,6 +111,29 @@ submit:
 sbatch /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/scripts/orthologs/run_rbh_orthologs.sbatch
 ```
 
+### Node-local scratch (important)
+
+The script copies inputs to node-local scratch (`$TMPDIR`, or `/tmp` if
+`$TMPDIR` is unset) and does all `gffread`/DIAMOND work there, only
+copying results back to the NFS-mounted `$WORKDIR` at the end. This
+isn't optional polish -- DIAMOND's `makedb`/`blastp` are known to hang
+at 0% CPU for hours with no error when their input/output/temp files
+live on a network filesystem like `/private/groups/russelllab`
+([diamond#319](https://github.com/bbuchfink/diamond/issues/319),
+[diamond#930](https://github.com/bbuchfink/diamond/issues/930),
+[diamond#185](https://github.com/bbuchfink/diamond/issues/185)) -- that's
+what happened on 2026-08-13. If your cluster's node-local scratch isn't
+at `$TMPDIR`/`/tmp`, override `SCRATCH_BASE` at the top of the script
+(e.g. `/scratch/local`, `/localscratch` -- check with `df -h` on a
+compute node once, or ask your sysadmin).
+
+Every `gffread`/`diamond` call is also wrapped in `timeout` (see
+`run_step()` near the top of the script), so if something still hangs,
+the job fails within that step's budget (15-45 min depending on step)
+with a labeled error instead of silently sitting there for the full
+`#SBATCH --time` budget. Check the `.out` log first if a run fails --
+it'll say which step and whether it was a timeout or a real error.
+
 ## Output
 
 `dmel_dsim_orthologs_rbh.tsv` in `WORKDIR`
