@@ -25,27 +25,31 @@ Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_willi
 # rRNA gene lists for the Wolbachia titer calculation (calculate_wolbachia_titer
 # in the filter script), keyed by host species and by Wolbachia strain instead
 # of a single hardcoded Dmel+wMel gene list.
-# Host lists: generated directly from each species' RAW FlyBase GTF (no need
-# to run it through swap_gene_id_to_symbol.py / the full transcriptome build
-# first) by matching FlyBase's rRNA gene *symbol* convention
-# ("<N>SrRNA[-Psi]:CR#####") rather than feature type / gbkey, which FlyBase
-# GTFs don't reliably carry:
-#   python3 snakemake_scripts/reference/find_host_rrna_genes.py <host_gtf> > <out>.txt
-# (add --id-attr gene_id if your transcriptome's var_names are FBgn IDs
-# rather than symbols)
+# Host lists:
+#   Dmel, Dwil (RAW FlyBase GTF, no need to run through swap_gene_id_to_symbol.py
+#   / the full transcriptome build first) -- matches FlyBase's rRNA gene
+#   *symbol* convention ("<N>SrRNA[-Psi]:CR#####") rather than feature type /
+#   gbkey, which FlyBase GTFs don't reliably carry:
+#     python3 snakemake_scripts/reference/find_host_rrna_genes.py <host_gtf> > <out>.txt
+#   (add --id-attr gene_id if your transcriptome's var_names are FBgn IDs
+#   rather than symbols)
+#   Dsim (NCBI/Gnomon GTF, GCF_016746395.2 Prin_Dsim_3.1 -- not FlyBase) --
+#   use find_rrna_genes.py like the symbionts below, not find_host_rrna_genes.py,
+#   since it's feature-type/gbkey annotated rather than FlyBase symbol-annotated:
+#     python3 snakemake_scripts/reference/find_rrna_genes.py <dsim_gtf> > <out>.txt
 # Symbiont lists: run find_rrna_genes.py against each strain's own (unswapped)
 # GTF by build_combined_host_wolbachia_references.sh -> rrna_genes.txt next to
 # that strain's source GTF.
 host_rrna_genes:
   Dmel: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/kallisto_ref/host_rrna_genes.txt"
-  Dsim: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_simulans/kallisto_ref/host_rrna_genes.txt"
+  Dsim: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/kallisto_ref/host_rrna_genes.txt"
   Dwil: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/kallisto_ref/host_rrna_genes.txt"
 
 symbiont_rrna_genes:
-  wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/rrna_genes.txt"
+  wMel:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/rrna_genes.txt"
   wRi_M23:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/rrna_genes.txt"
-  wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/rrna_genes.txt"
-  wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/rrna_genes.txt"
+  wRi_Riv84: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/rrna_genes.txt"
+  wWil:      "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/rrna_genes.txt"
 
 # Single 16S rRNA gene (locus_tag) per Wolbachia strain, used by the
 # count_16s_reads rule to quantify 16S rRNA reads via read alignment
@@ -78,22 +82,22 @@ genome_components:
 # fetched by the download_dsim_annotation rule if not already present; the
 # others are expected to already exist on disk.
 host_genome:
-  Dmel: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-aligned-r6.68.fasta",
+  Dmel: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-chromosome-r6.68.fasta",
          gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-r6.68.gtf"}
-  Dsim: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_simulans/dsim-all-chromosome-r2.02.fasta",
-         gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_simulans/dsim-all-r2.02.gtf"}
+  Dsim: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/GCF_016746395.2_Prin_Dsim_3.1_genomic.fna",
+         gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/Dsim/GCF_016746395.2_Prin_Dsim_3.1.gtf"}
   Dwil: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/dwil-all-chromosome-r1.04.fasta",
          gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_willistoni/dwil-all-r1.04.gtf"}
 
 wolbachia_genome:
-  wMel:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/GCF_016584425.1_ASM1658442v1_genomic.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wMel_GCF_016584425.1/wMel_GCF_016584425.1.gtf"}
-  wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/GCF_000022285.1_ASM2228v1_genomic.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_Riv84_GCF_000022285.1/wRi_Riv84_GCF_000022285.1.gtf"}
+  wMel:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1.gtf"}
+  wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1.gtf"}
   wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/20260402_wRi_M23_pilon.fasta",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/wRi_M23_v3.gtf"}
-  wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/wWil_GCF_040084705.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wWil_GCF_040084705.1/wWil_GCF_040084705.1.gtf"}
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/wRi_M23_GCA_979474595.1/wRi_M23_v3.fixed.gtf"}
+  wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12.gtf"}
 
 sixteen_s_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S/highly_represented_16S_filtered.renamed.fasta"
 sixteen_s_gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/16S_fixed.gtf"
