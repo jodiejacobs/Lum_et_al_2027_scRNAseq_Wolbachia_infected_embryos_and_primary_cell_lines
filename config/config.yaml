@@ -54,7 +54,7 @@ symbiont_rrna_genes:
 # from that strain's own GTF (wolbachia_genome[strain].gtf) at rule-eval
 # time -- only the locus_tag needs to be supplied here.
 symbiont_16s_gene:
-  wMel:      "GQX67_RS05935"
+  wMel:      "WD_RS05540"
   wRi_Riv84: "WRI_RS06005"
   wRi_M23:   "M23_00679"
   wWil:      "ABL518_RS01510"
@@ -96,7 +96,7 @@ wolbachia_genome:
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12.gtf"}
 
 sixteen_s_fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S/highly_represented_16S_filtered.renamed.fasta"
-sixteen_s_gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/16S_fixed.gtf"
+sixteen_s_gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/highly_represented_16S/highly_represented_16S_filtered.final.gtf"
 
 swap_gene_id_script:    "snakemake_scripts/reference/swap_gene_id_to_symbol.py"
 find_rrna_genes_script: "snakemake_scripts/reference/find_rrna_genes.py"
@@ -131,7 +131,7 @@ cellranger_time: "2:00:00"  # HH:MM:SS
 cellranger_partition: "medium"  # SLURM partition for cellranger jobs
 
 # Compute resources for pipseeker
-pipseeker_threads: 16
+pipseeker_threads: 64
 pipseeker_cpus: 16
 pipseeker_mem: 1000000  # MB
 pipseeker_time: "6:00:00"  # HH:MM:SS

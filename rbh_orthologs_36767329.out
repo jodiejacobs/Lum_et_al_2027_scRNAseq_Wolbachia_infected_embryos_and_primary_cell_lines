@@ -1,5 +1,5 @@
-Thu Aug 13 12:33:07 PM PDT 2026
-phoenix-06.prism
+Thu Aug 13 03:13:32 PM PDT 2026
+phoenix-10.prism
 /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines
 [/private/groups/russelllab/jodie/scRNAseq/reference/Flybase_genomes/Drosophila_melanogaster/dmel-all-r6.68.gtf] 35736 total id -> gene_id pairs (531707 transcript_id rows, 0 protein_id rows seen)
 NOTE: no protein_id attribute found in this GTF -- gffread -y will fall back to transcript_id for FASTA headers here, which this map already covers.
@@ -8,8 +8,8 @@ diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjam
 Documentation, support and updates available at http://www.diamondsearch.org
 Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
 
-#CPU threads: 16
+#CPU threads: 64
 Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
 Database input file: dmel_proteins.fasta
-Opening the database file...  [0.337s]
-Loading sequences... 
+Opening the database file...  [1.249s]
+Loading sequences... slurmstepd-phoenix-10: error: *** JOB 36767329 ON phoenix-10 CANCELLED AT 2026-08-13T21:13:54 DUE TO TIME LIMIT ***
