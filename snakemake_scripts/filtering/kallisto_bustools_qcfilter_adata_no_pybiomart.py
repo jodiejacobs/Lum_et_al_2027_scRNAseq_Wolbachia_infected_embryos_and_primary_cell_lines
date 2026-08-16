@@ -45,12 +45,13 @@ parser.add_argument("--host_rrna_genes", type=str, default=None,
                     help="Text file, one host (Drosophila) rRNA gene id per "
                          "line -- generate with "
                          "snakemake_scripts/reference/find_host_rrna_genes.py "
-                         "against that sample's host GTF. Currently UNUSED: "
-                         "wolbachia_titer is a stopgap raw symbiont rRNA "
-                         "count, not normalized against host rRNA (see "
-                         "calculate_wolbachia_titer docstring). Kept as a "
-                         "CLI arg so it's ready when normalization is "
-                         "revisited.")
+                         "(FlyBase GTFs) or find_rrna_genes.py (NCBI/Gnomon "
+                         "GTFs, e.g. Dsim) against that sample's host GTF. "
+                         "Used to normalize wolbachia_titer as "
+                         "symbiont / (symbiont + host) rRNA counts per cell. "
+                         "If omitted or none of the listed genes are found "
+                         "in var_names, falls back to raw (unnormalized) "
+                         "symbiont rRNA counts.")
 parser.add_argument("--symbiont_rrna_genes", type=str, default=None,
                     help="Text file, one Wolbachia rRNA gene id per line -- "
                          "generate with find_rrna_genes.py against that "
@@ -148,26 +149,35 @@ sc.settings.set_figure_params(dpi=300, dpi_save=300, figsize=(2, 2), fontsize=6)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
-    """STOPGAP: wolbachia_titer = total symbiont (Wolbachia) rRNA transcript
-    counts per cell -- NOT normalized against host rRNA.
+    """wolbachia_titer = symbiont (Wolbachia) rRNA counts as a fraction of
+    total rRNA counts per cell:
 
-    This used to be a true ratio, symbiont / (symbiont + host) rRNA reads,
-    but host rRNA gene lists aren't available/annotated for every host
-    genome (e.g. Dsim's FlyBase r2.02 annotation has no rRNA genes at all,
-    which made the ratio collapse to ~1.0 for any cell with symbiont rRNA
-    reads -- a misleading presence/absence flag, not a real titer). Until
-    there's a normalization strategy that works across all host genomes,
-    this just reports raw symbiont rRNA counts per cell.
+        titer = symbiont_rrna / (symbiont_rrna + host_rrna)
 
-    host_rrna_genes is accepted but unused -- kept in the signature/CLI so
-    callers don't need to change when normalization is revisited.
+    This used to be disabled (raw symbiont rRNA counts only) because host
+    rRNA gene lists weren't available for every host genome -- e.g. Dsim's
+    FlyBase r2.02 annotation has no rRNA genes at all, which made the ratio
+    collapse to ~1.0 for any cell with symbiont rRNA reads (a misleading
+    presence/absence flag, not a real titer). Dsim's config now points at
+    an NCBI/Gnomon GTF with real rRNA annotations (see
+    find_rrna_genes.py / config.yaml host_rrna_genes), so normalization is
+    restored here for all host genomes that have a resolved gene list.
+
+    Falls back to raw (unnormalized) symbiont rRNA counts if host_rrna_genes
+    is empty or none of its genes are found in adata.var_names, so a host
+    genome without a titer gene list yet degrades gracefully instead of
+    crashing the run.
+
+    Cells with symbiont + host rRNA counts both 0 get titer = NaN (rRNA
+    undetected in that cell, not a genuine 0) -- downstream scripts
+    (e.g. scanpy_cellcycle_analysis_v2.analyze_titer) already dropna() on
+    this column.
 
     symbiont_rrna_genes is resolved per-strain by find_rrna_genes.py (scans
     the actual GTF for rRNA-annotated features) rather than hardcoded, so
     this works for any Wolbachia strain instead of only wMel.
     """
-    print("Calculating Wolbachia titer (STOPGAP: raw symbiont rRNA counts, "
-          "not normalized against host) …")
+    print("Calculating Wolbachia titer …")
 
     if not symbiont_rrna_genes:
         print("  No symbiont rRNA gene list supplied (--symbiont_rrna_genes) "
@@ -177,6 +187,7 @@ def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
 
     var_names = list(adata.var_names)
     symbiont_present = [g for g in symbiont_rrna_genes if g in var_names]
+    host_present      = [g for g in host_rrna_genes if g in var_names]
 
     def _sum_genes(gene_list):
         if not gene_list:
@@ -189,10 +200,32 @@ def calculate_wolbachia_titer(adata, host_rrna_genes, symbiont_rrna_genes):
 
     symbiont_total = _sum_genes(symbiont_present)
 
-    adata.obs['wolbachia_titer'] = symbiont_total
-    print(f"  Mean: {symbiont_total.mean():.4f}  Median: {np.median(symbiont_total):.4f}  "
-          f"Symbiont rRNA genes present: {symbiont_present} "
+    if not host_present:
+        reason = ("no host rRNA gene list supplied (--host_rrna_genes)"
+                   if not host_rrna_genes else
+                   f"none of {len(host_rrna_genes)} host rRNA gene(s) found "
+                   "in adata.var_names")
+        print(f"  WARNING: {reason} -- falling back to raw (unnormalized) "
+              "symbiont rRNA counts")
+        adata.obs['wolbachia_titer'] = symbiont_total
+        print(f"  Mean: {symbiont_total.mean():.4f}  Median: {np.median(symbiont_total):.4f}  "
+              f"Symbiont rRNA genes present: {symbiont_present} "
+              f"({len(symbiont_present)}/{len(symbiont_rrna_genes)})")
+        return adata
+
+    host_total = _sum_genes(host_present)
+    total = symbiont_total + host_total
+    with np.errstate(invalid='ignore', divide='ignore'):
+        titer = np.where(total > 0, symbiont_total / total, np.nan).astype(np.float32)
+
+    adata.obs['wolbachia_titer'] = titer
+    n_nan = int(np.isnan(titer).sum())
+    print(f"  Mean: {np.nanmean(titer):.4f}  Median: {np.nanmedian(titer):.4f}  "
+          f"NaN (no rRNA detected): {n_nan}/{adata.n_obs}")
+    print(f"  Symbiont rRNA genes present: {symbiont_present} "
           f"({len(symbiont_present)}/{len(symbiont_rrna_genes)})")
+    print(f"  Host rRNA genes present: {host_present} "
+          f"({len(host_present)}/{len(host_rrna_genes)})")
     return adata
 
 
