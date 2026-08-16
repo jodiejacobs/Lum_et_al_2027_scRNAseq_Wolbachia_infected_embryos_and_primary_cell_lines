@@ -84,7 +84,8 @@ same ID namespace as this table's `Dsim` column.
 
 | File | Purpose |
 |---|---|
-| `run_rbh_orthologs.sbatch` | SLURM pipeline: gffread protein extraction, DIAMOND makedb, reciprocal blastp, RBH filtering |
+| `run_rbh_orthologs.sbatch` | SLURM pipeline: gffread protein extraction, DIAMOND makedb, reciprocal blastp, RBH filtering (dmel/dsim steps run sequentially) |
+| `run_rbh_orthologs_parallel.sbatch` | Same pipeline; the independent dmel/dsim branches of each stage (copy, gffread, makedb, blastp) run concurrently as background jobs instead of one after another, each diamond job getting half of `$SLURM_CPUS_PER_TASK` |
 | `gtf_id_map.py` | Extracts protein_id/transcript_id → gene_id from any GTF's attribute column (FlyBase or NCBI/Gnomon) |
 | `get_id_map.py` | Legacy: extracts protein_id → FBgn from a FlyBase translation FASTA header (`parent=FBgn...`) — only usable if you have that kind of FASTA for both species |
 | `filter_rbh.py` | Collapses two one-directional best-hit tables into gene-level reciprocal best hits |
@@ -133,6 +134,26 @@ the job fails within that step's budget (15-45 min depending on step)
 with a labeled error instead of silently sitting there for the full
 `#SBATCH --time` budget. Check the `.out` log first if a run fails --
 it'll say which step and whether it was a timeout or a real error.
+
+### Parallel variant
+
+`run_rbh_orthologs_parallel.sbatch` runs the dmel and dsim branches of
+each stage concurrently (`launch`/`wait_all` helpers, same idea as
+`run_step` but backgrounded, with each job's full output captured to
+its own log and printed after both finish so concurrent output doesn't
+interleave). Each diamond job gets `$SLURM_CPUS_PER_TASK / 2` threads
+instead of the full allocation -- for proteomes this size (~13-14k
+sequences/species), diamond's per-job speedup flattens out well before
+using 64 threads, so two 32-thread jobs running side by side finish
+faster overall than one 64-thread job at a time. Same node-local-scratch
+and timeout safeguards as the sequential version; if a parallel stage
+fails, the log names which of the two concurrent branches failed and
+whether it was a timeout or a real error.
+
+Note this doesn't fix a hang by itself -- it's a throughput
+improvement on top of the same pipeline. If a run still fails, the
+`.out` log's per-branch labels are exactly what's needed to diagnose
+further (which branch, timeout vs. real error, at what point).
 
 ## Output
 
