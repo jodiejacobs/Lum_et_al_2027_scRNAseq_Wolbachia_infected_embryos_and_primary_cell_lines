@@ -157,7 +157,9 @@ def remap_dsim_to_dmel(adata, dsim_to_dmel, label=""):
     """Rename a Dsim sample's var_names (Dsim FlyBase IDs) to the
     orthologous Dmel FlyBase ID, dropping genes with no 1:1 ortholog."""
     mapped = adata.var_names.map(dsim_to_dmel)
-    keep = mapped.notna().values
+    # Index.map() returns an Index; Index.notna() already returns a plain
+    # ndarray (unlike Series.notna()), so no trailing .values here.
+    keep = mapped.notna()
     n_total, n_kept = adata.n_vars, int(keep.sum())
     print(f"  [{label}] Dsim->Dmel remap: {n_kept}/{n_total} genes have a "
           f"1:1 Dmel ortholog (kept); {n_total - n_kept} dropped (no ortholog, "
