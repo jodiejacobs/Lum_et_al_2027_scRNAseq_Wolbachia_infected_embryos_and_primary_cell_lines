@@ -363,6 +363,44 @@ def load_atlas_reference(atlas_path, label_cols, flybase_annotation=None,
         X = scipy.sparse.csr_matrix(X)
     X.data = X.data.astype(np.float32)
 
+    # The Flysta3D-v2 export co-embeds scRNA-seq and scATAC-seq cells in the
+    # same object (see the `assay` obs column). The ATAC-only barcodes carry
+    # nCount_RNA == 0 / nFeature_RNA == 0 -- i.e. an all-zero row in the
+    # counts matrix we just extracted. Left in, an all-zero row survives
+    # normalize_total (0/0 -> 0, harmless) but after sc.pp.scale() every gene
+    # in that row becomes a strong, *uniform* z-score of -mean/std rather
+    # than "no information" -- which pulls all such cells together into
+    # tight, artificial clusters sitting off to the side of the real
+    # biological manifold. That matches the "small mixed clusters
+    # surrounding the actual atlas" you're seeing, and they're composed of
+    # atlas cells because they *are* atlas cells -- just ones with no RNA
+    # signal to cluster on. Drop them here before anything downstream sees
+    # them.
+    total_counts = np.asarray(X.sum(axis=1)).ravel()
+    keep_cell = total_counts > 0
+    n_dropped = int((~keep_cell).sum())
+    if n_dropped:
+        print(f"   Dropping {n_dropped:,} / {X.shape[0]:,} atlas cells with "
+              f"zero total counts (likely co-embedded ATAC-only barcodes, "
+              f"not RNA transcriptomes)")
+        if "assay" in atlas.obs.columns:
+            dropped_assay_counts = (
+                atlas.obs.loc[~keep_cell, "assay"].value_counts()
+            )
+            kept_assay_counts = (
+                atlas.obs.loc[keep_cell, "assay"].value_counts()
+            )
+            print("   Dropped cells by `assay`:")
+            for val, n in dropped_assay_counts.items():
+                print(f"     {val}: {n:,}")
+            print("   Kept cells by `assay`:")
+            for val, n in kept_assay_counts.items():
+                print(f"     {val}: {n:,}")
+        X = X[keep_cell]
+        atlas = atlas[keep_cell].copy()
+    else:
+        print("   No zero-count atlas cells found (nothing dropped)")
+
     ref = ad.AnnData(X=X, obs=atlas.obs[label_cols].copy(), var=var)
     ref.obs_names = atlas.obs_names
     ref.obs["dataset"] = "flysta3d_atlas"
