@@ -190,6 +190,23 @@ integrate_partition: "medium"
 integrate_mem: 128000
 integrate_time: "8:00:00"
 
+# Embryo -> cell line trajectory/identity analysis (rule
+# embryo_to_cellline_trajectory / snakemake_scripts/analysis/
+# embryo_to_cellline_trajectory.py). Exploratory -- set trajectory_skip_*
+# to true to skip the slower sections (marker DE + scoring, pseudobulk
+# correlation, UMAP overview) for a fast first pass.
+trajectory_script:          "snakemake_scripts/analysis/embryo_to_cellline_trajectory.py"
+trajectory_conf_threshold:  0.5
+trajectory_min_cells:       20
+trajectory_top_n_markers:   50
+trajectory_skip_markers:    false
+trajectory_skip_pseudobulk: false
+trajectory_skip_umap:       false
+trajectory_threads:         8
+trajectory_partition:       "medium"
+trajectory_mem:             64000
+trajectory_time:            "4:00:00"
+
 # Flysta3D-v2 atlas cell-type label transfer (Wang et al. 2025 Cell,
 # https://db.cngb.org/stomics/flysta3d-v2/). Candidate obs columns printed
 # by the first annotate_with_atlas dry run (see

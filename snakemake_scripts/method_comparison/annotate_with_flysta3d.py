@@ -74,6 +74,8 @@ import argparse
 
 import numpy as np
 import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
 import scipy.sparse
 import anndata as ad
 import scanpy as sc
@@ -555,6 +557,96 @@ def knn_label_transfer(combined, ref_mask, ref_obs, label_cols, k=30):
 
 
 # -----------------------------------------------------------------------------
+# Diagnostics -- QC plots showing the label transfer is doing something sane
+# -----------------------------------------------------------------------------
+
+def _savefig(fig, path):
+    fig.savefig(path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    print(f"   Saved: {path}")
+
+
+def plot_diagnostics(combined, ref_mask, ref_obs, transferred_df, label_cols,
+                      fig_dir, k):
+    """QC plots for the atlas -> query label transfer:
+      - UMAP colored by dataset (atlas vs. query) -- the sanity check is
+        that query cells scatter through the same regions as atlas cells
+        rather than clumping off in their own separate island, which would
+        mean Harmony didn't actually integrate the two batches.
+      - UMAP colored by each label_col (atlas ground truth on reference
+        cells, KNN-transferred value on query cells, same color scale) --
+        query cells should land in/near the same-colored atlas regions if
+        the transfer is picking up real biology.
+      - Confidence score histogram + per-source-file confidence boxplot for
+        each label_col -- flags samples or whole label columns where the
+        KNN vote was weak (transfer is a guess, not a confident call).
+    """
+    os.makedirs(fig_dir, exist_ok=True)
+    sc.settings.figdir = fig_dir
+
+    print(f"\n-- Diagnostic plots (k={k}) -- writing to {fig_dir}/ --")
+    print("   Computing neighbors + UMAP on combined Harmony embedding ...")
+    sc.pp.neighbors(combined, use_rep="X_pca_harmony", n_neighbors=30)
+    sc.tl.umap(combined)
+
+    combined.obs["_dataset_display"] = np.where(ref_mask, "flysta3d_atlas", "query")
+    sc.pl.umap(combined, color="_dataset_display", save="_dataset.pdf",
+               title="Atlas vs. query cells (post-Harmony)")
+
+    ref_names_in_combined   = combined.obs_names[ref_mask]
+    query_names_in_combined = combined.obs_names[~ref_mask]
+    ref_obs_aligned = ref_obs.loc[ref_names_in_combined]
+
+    for col in label_cols:
+        atlas_col = f"atlas_{col}"
+        conf_col  = f"{atlas_col}_confidence"
+
+        display_col = f"_display_{col}"
+        combined.obs[display_col] = pd.Series(index=combined.obs_names, dtype=object)
+        combined.obs.loc[ref_names_in_combined, display_col] = \
+            ref_obs_aligned[col].astype(str).values
+        combined.obs.loc[query_names_in_combined, display_col] = \
+            transferred_df.loc[query_names_in_combined, atlas_col].astype(str).values
+        combined.obs[display_col] = combined.obs[display_col].fillna("NA")
+
+        sc.pl.umap(combined, color=display_col, save=f"_{col}.pdf",
+                   title=f"'{col}': atlas ground truth + KNN-transferred query")
+
+        conf_vals = transferred_df.loc[query_names_in_combined, conf_col].astype(float)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(conf_vals.dropna(), bins=30, color="#2196F3", edgecolor="black", alpha=0.8)
+        ax.axvline(conf_vals.mean(), color="red", linestyle="--",
+                   label=f"mean={conf_vals.mean():.2f}")
+        ax.set_xlabel(f"KNN confidence ({col})")
+        ax.set_ylabel("Query cells")
+        ax.set_title(f"Label transfer confidence -- {col} (k={k})")
+        ax.legend()
+        _savefig(fig, os.path.join(fig_dir, f"confidence_hist_{col}.pdf"))
+
+        conf_df = pd.DataFrame({
+            "confidence":  conf_vals.values,
+            "source_file": combined.obs.loc[query_names_in_combined, "source_file"].values,
+        })
+        samples = sorted(conf_df["source_file"].unique())
+        fig, ax = plt.subplots(figsize=(max(8, len(samples) * 1.2), 5))
+        ax.boxplot([conf_df.loc[conf_df["source_file"] == s, "confidence"].dropna().values
+                    for s in samples],
+                   labels=samples, showfliers=False)
+        ax.set_ylabel(f"KNN confidence ({col})")
+        ax.set_title(f"Label transfer confidence by sample -- {col}")
+        ax.set_ylim(0, 1.05)
+        plt.xticks(rotation=45, ha="right")
+        _savefig(fig, os.path.join(fig_dir, f"confidence_by_sample_{col}.pdf"))
+
+        conf_df.groupby("source_file")["confidence"].agg(
+            ["mean", "median", "std", "count"]
+        ).to_csv(os.path.join(fig_dir, f"confidence_summary_{col}.csv"))
+
+    print(f"   Diagnostic plots complete -- see {fig_dir}/")
+
+
+# -----------------------------------------------------------------------------
 # Step 5 -- Merge labels back onto each ORIGINAL query file and write out
 # -----------------------------------------------------------------------------
 
@@ -648,6 +740,13 @@ def main():
     parser.add_argument("--subsample_ref", type=int, default=None,
                          help="Subsample the atlas to this many cells before "
                               "integration -- use for a fast first pass.")
+    parser.add_argument("--fig_dir", type=str, default=None,
+                         help="If given, write QC plots here: UMAP colored "
+                              "by atlas-vs-query, UMAP colored by each "
+                              "transferred label, and confidence-score "
+                              "histograms/boxplots per label per sample. "
+                              "Adds a neighbors+UMAP computation on top of "
+                              "the Harmony step. Omit to skip plotting.")
 
     args = parser.parse_args()
 
@@ -682,6 +781,12 @@ def main():
     transferred_df = knn_label_transfer(
         combined, ref_mask, ref_obs, args.label_cols, k=args.k,
     )
+
+    if args.fig_dir:
+        plot_diagnostics(
+            combined, ref_mask, ref_obs, transferred_df, args.label_cols,
+            args.fig_dir, k=args.k,
+        )
 
     write_annotated_outputs(originals, transferred_df, args.out_dir)
 

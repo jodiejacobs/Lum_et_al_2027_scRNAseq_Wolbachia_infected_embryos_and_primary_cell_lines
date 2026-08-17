@@ -257,6 +257,8 @@ rule all:
         #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
         # Integration
         "results/integrated/integrated.h5ad",
+        # Embryo -> cell line trajectory/identity analysis
+        "results/trajectory_analysis/.done",
         # Validate PIPseq and 10X clustering
         "results/validate_pipseq/label_transfer_confusion_matrix.csv",
         "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
@@ -879,6 +881,7 @@ rule annotate_with_atlas:
         script       = config.get("annotate_atlas_script",
                            "snakemake_scripts/method_comparison/annotate_with_flysta3d.py"),
         out_dir      = "results/embryo_annotated",
+        fig_dir      = "results/embryo_annotated/figures",
         k            = config.get("atlas_k", 30),
         n_pcs        = config.get("atlas_n_pcs", 30),
         harmony_vars = config.get("atlas_harmony_vars", ["dataset", "method"]),
@@ -912,6 +915,7 @@ rule annotate_with_atlas:
             --atlas {input.atlas} \
             --query {input.files} \
             --out_dir {params.out_dir} \
+            --fig_dir {params.fig_dir} \
             --flybase_annotation {input.flybase_annotation} \
             --ortholog_map {input.orthologs} \
             --k {params.k} \
@@ -945,6 +949,7 @@ rule map_celllines_to_embryo:
         script       = config.get("map_cellline_script",
                            "snakemake_scripts/analysis/map_cellline_to_embryo.py"),
         out_dir      = "results/celllines_mapped_to_embryo",
+        fig_dir      = "results/celllines_mapped_to_embryo/figures",
         k            = config.get("cellline_embryo_k", 30),
         n_pcs        = config.get("cellline_embryo_n_pcs", 30),
         harmony_vars = config.get("cellline_embryo_harmony_vars", ["dataset", "method"]),
@@ -976,6 +981,7 @@ rule map_celllines_to_embryo:
             --reference {input.reference} \
             --query {input.query} \
             --out_dir {params.out_dir} \
+            --fig_dir {params.fig_dir} \
             --ortholog_map {input.orthologs} \
             --k {params.k} \
             --n_pcs {params.n_pcs} \
@@ -1036,6 +1042,61 @@ rule integrate:
             --ortholog_map {input.orthologs}
 
         echo "Integration complete"
+        """
+
+##################################################################
+# Embryo -> cell line trajectory/identity analysis
+##################################################################
+# Exploratory pass over the integrated object: how do the cultured primary
+# cell lines relate to the embryonic tissues they were derived from? Runs
+# composition, diversity, confidence, pseudobulk correlation, marker-module
+# scoring, cell cycle shift, Wolbachia effects, species, and cluster
+# composition analyses -- see the module docstring in
+# snakemake_scripts/analysis/embryo_to_cellline_trajectory.py for the full
+# rationale behind each one. Every plot has a matching CSV of the
+# underlying numbers.
+rule embryo_to_cellline_trajectory:
+    input:
+        h5ad = rules.integrate.output.integrated
+    output:
+        flag = touch("results/trajectory_analysis/.done")
+    params:
+        script          = config.get("trajectory_script",
+                               "snakemake_scripts/analysis/embryo_to_cellline_trajectory.py"),
+        fig_dir         = "results/trajectory_analysis",
+        conf_threshold  = config.get("trajectory_conf_threshold", 0.5),
+        min_cells       = config.get("trajectory_min_cells", 20),
+        top_n_markers   = config.get("trajectory_top_n_markers", 50),
+        skip_markers    = "--skip_markers" if config.get("trajectory_skip_markers", False) else "",
+        skip_pseudobulk = "--skip_pseudobulk" if config.get("trajectory_skip_pseudobulk", False) else "",
+        skip_umap       = "--skip_umap" if config.get("trajectory_skip_umap", False) else "",
+    log:
+        "logs/trajectory_analysis/trajectory_analysis.log"
+    threads:
+        config.get("trajectory_threads", 8)
+    resources:
+        slurm_partition = config.get("trajectory_partition", "medium"),
+        mem_mb          = config.get("trajectory_mem", 64000),
+        slurm_time      = config.get("trajectory_time", "4:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting embryo -> cell line trajectory analysis"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --input {input.h5ad} \
+            --fig_dir {params.fig_dir} \
+            --conf_threshold {params.conf_threshold} \
+            --min_cells {params.min_cells} \
+            --top_n_markers {params.top_n_markers} \
+            {params.skip_markers} \
+            {params.skip_pseudobulk} \
+            {params.skip_umap}
+
+        echo "Trajectory analysis complete"
         """
 
 rule cell_cycle_analysis:
