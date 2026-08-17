@@ -29,10 +29,9 @@ Dwil_wWil: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_willi
 #   Dmel, Dwil (RAW FlyBase GTF, no need to run through swap_gene_id_to_symbol.py
 #   / the full transcriptome build first) -- matches FlyBase's rRNA gene
 #   *symbol* convention ("<N>SrRNA[-Psi]:CR#####") rather than feature type /
-#   gbkey, which FlyBase GTFs don't reliably carry:
-#     python3 snakemake_scripts/reference/find_host_rrna_genes.py <host_gtf> > <out>.txt
-#   (add --id-attr gene_id if your transcriptome's var_names are FBgn IDs
-#   rather than symbols)
+#   gbkey, which FlyBase GTFs don't reliably carry, but prints the FBgn
+#   (--id-attr gene_id) since gene_id_type is "flybase" / var_names are FBgn:
+#     python3 snakemake_scripts/reference/find_host_rrna_genes.py <host_gtf> --id-attr gene_id > <out>.txt
 #   Dsim (NCBI/Gnomon GTF, GCF_016746395.2 Prin_Dsim_3.1 -- not FlyBase) --
 #   use find_rrna_genes.py like the symbionts below, not find_host_rrna_genes.py,
 #   since it's feature-type/gbkey annotated rather than FlyBase symbol-annotated:
