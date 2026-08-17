@@ -191,13 +191,22 @@ integrate_mem: 128000
 integrate_time: "8:00:00"
 
 # Flysta3D-v2 atlas cell-type label transfer (Wang et al. 2025 Cell,
-# https://db.cngb.org/stomics/flysta3d-v2/). Run annotate_with_atlas once,
-# check the printed candidate obs columns / label distributions in
-# logs/annotate_with_atlas/annotate_with_atlas.log, then fill in
-# atlas_label_cols below with the real column name(s) (e.g. ["cell_type"]).
+# https://db.cngb.org/stomics/flysta3d-v2/). Candidate obs columns printed
+# by the first annotate_with_atlas dry run (see
+# logs/annotate_with_atlas/annotate_with_atlas.log) on the whole-embryo
+# co-embed atlas:
+#   'annotation'            (22 values)  -- atlas's primary cell-type call
+#   'celltype_in_monomics'  (175 values) -- much finer-grained subtype
+#   'tissue'                (22 values)
+#   'germ_layer'            (7 values)   -- coarsest
+#   'timeslot'               (11 values)  -- developmental stage, not identity
+#   'orig.ident' / 'assay'  -- sample/technology metadata, not identity
+# Using annotation + tissue + germ_layer (coarse-to-fine cell identity,
+# skipping the very sparse 175-category celltype_in_monomics); add it back
+# here if you want that finer resolution too.
 annotate_atlas_script: "snakemake_scripts/method_comparison/annotate_with_flysta3d.py"
 flysta3d_atlas: "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"
-atlas_label_cols: []  # e.g. ["cell_type", "tissue"] -- leave empty to just print candidates and stop
+atlas_label_cols: ["annotation", "tissue", "germ_layer"]
 atlas_k: 30
 atlas_n_pcs: 30
 atlas_harmony_vars: ["dataset", "method"]
