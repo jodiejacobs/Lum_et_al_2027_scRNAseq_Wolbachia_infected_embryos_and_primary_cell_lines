@@ -194,6 +194,8 @@ def harmonise_atlas_gene_ids(atlas, flybase_annotation=None):
     """
     frac_fbgn = atlas.var_names.str.match(FBGN_RE).mean()
     print(f"  Atlas var_names matching FBgn pattern: {frac_fbgn*100:.1f}%")
+    print(f"  Atlas var_names sample (first 20): {atlas.var_names[:20].tolist()}")
+    print(f"  Atlas var.columns: {atlas.var.columns.tolist()}")
     if frac_fbgn > 0.5:
         print("  Atlas already FBgn-indexed -- no remap needed")
         return atlas
@@ -230,15 +232,59 @@ def harmonise_atlas_gene_ids(atlas, flybase_annotation=None):
     print(f"  Symbol->FBgn remap: {n_kept}/{n_total} atlas genes matched "
           f"({n_total - n_kept} dropped -- no unique FBgn for that symbol)")
     if n_kept < 1000:
+        sample_symbols = list(symbol_to_fbgn.keys())[:20]
+        print(f"  Atlas var_names sample (unmatched): {atlas.var_names[:20].tolist()}")
+        print(f"  FlyBase table symbol sample (what we're matching against): "
+              f"{sample_symbols}")
         raise ValueError(
             f"Only {n_kept} atlas genes remapped to FBgn -- something is "
             "wrong with the symbol matching (check for a species-prefix "
-            "like 'Dmel\\\\' or case mismatches in atlas.var_names)."
+            "like 'Dmel\\\\' or case mismatches in atlas.var_names, or "
+            "whether atlas.var_names are actually symbols at all -- compare "
+            "the two samples printed above)."
         )
     atlas = atlas[:, keep].copy()
     atlas.var_names = mapped[keep].astype(str).values
     atlas.var_names_make_unique()
     return atlas
+
+
+def _recover_var_index(var, label="var"):
+    """Some h5ad exports (e.g. R/Seurat -> h5ad round-trips, or a "_modified"
+    re-export like this atlas) end up with a purely positional integer var
+    index (0, 1, 2, ...) while the real gene identifiers survive only as an
+    ordinary column -- commonly literally named "index", a naming collision
+    with anndata's own special "_index" marker used on disk. Left alone,
+    var_names is just row numbers and every downstream gene-ID match (FBgn
+    pattern, symbol->FBgn remap) silently returns ~0 hits instead of
+    erroring loudly.
+
+    Detects a numeric-looking index and, if found, promotes whichever
+    column looks like real (non-numeric) gene IDs back to the index.
+    """
+    idx_is_numeric = pd.Series(var.index.astype(str)).str.match(r"^\d+$").mean() > 0.9
+    if not idx_is_numeric:
+        return var
+
+    for col in var.columns:
+        vals = var[col].astype(str)
+        if vals.str.match(r"^\d+$").mean() < 0.5:
+            print(f"   {label}: index is positional (0,1,2,...) -- "
+                  f"promoting column '{col}' (e.g. {vals.iloc[0]!r}) to be "
+                  "the real var_names")
+            # drop=True: a leftover column literally named "index" (as seen
+            # in this atlas export) would otherwise collide with anndata's
+            # own on-disk "_index" convention when the object is written
+            # back out later.
+            var = var.set_index(col, drop=True)
+            var.index.name = None
+            return var
+
+    print(f"   WARNING: {label} index looks positional (0,1,2,...) and no "
+          f"column looks like real gene IDs either (columns: "
+          f"{list(var.columns)}) -- leaving var_names as row numbers, gene "
+          "ID matching below will fail")
+    return var
 
 
 # -----------------------------------------------------------------------------
@@ -302,6 +348,12 @@ def load_atlas_reference(atlas_path, label_cols, flybase_annotation=None,
               "structure used for PCA/Harmony/KNN is only mildly affected. "
               "Check atlas.X.max() / whether values look like log1p counts "
               "if this matters for your analysis.")
+
+    # This atlas export (and apparently others like it -- see
+    # _recover_var_index docstring) can carry a purely positional var index
+    # with the real gene IDs stranded in an ordinary column instead; fix
+    # that up before var_names is used for anything downstream.
+    var = _recover_var_index(var, label="atlas var")
 
     if scipy.sparse.issparse(X):
         X = X.tocsr()
