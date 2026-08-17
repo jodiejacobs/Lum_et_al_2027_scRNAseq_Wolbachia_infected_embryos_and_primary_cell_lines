@@ -33,11 +33,24 @@ Strategy
    Dsim samples' var_names to Dmel orthologs, and coalesce the
    atlas_<label>/embryo_<label> columns above into one cell_type_<label>
    field per cell.
-2. Preprocess: filter, HVG, PCA.
-3. Correct for library-prep method + replicate ONLY (Harmony) — biological
-   signal (condition, embryo vs. cell line, Wolbachia titer, cell type) is
-   preserved, not corrected away.
-4. Cluster ALL cells together.
+2. Split cells into embryo (obs['is_embryo']) vs. primary cell line.
+3. STAGE 1 -- build one combined embryo reference: preprocess (filter, HVG,
+   PCA) the embryo cells only, correct for library-prep method + replicate
+   ONLY (Harmony) -- biological signal (embryo condition, Wolbachia titer,
+   cell type) is preserved, not corrected away -- then Leiden-cluster the
+   embryo cells together. This is the "combine the embryo datasets" step:
+   every embryo condition/replicate/method lands in one shared space.
+4. STAGE 2 -- project the primary cell line cells into that embryo
+   reference rather than re-clustering everything from scratch: jointly
+   re-select HVGs on reference + cell-line raw counts (batch_key='dataset'),
+   normalise, scale, PCA, Harmony (batch = embryo_reference vs.
+   cellline_query, + method) -- mirroring the same reference-vs-query
+   Harmony+KNN recipe rule map_celllines_to_embryo already uses for cell
+   type transfer (see map_cellline_to_embryo.py) -- then each cell line
+   cell gets the majority-vote Leiden cluster of its k nearest embryo
+   reference neighbours in that corrected space. Reference cells keep their
+   own Leiden call. One shared UMAP is computed on the combined embedding
+   so both populations can be plotted together.
 5. Ask which clusters are enriched at which conditions.
 6. Ask how Wolbachia titer varies across clusters.
 7. Export SCEPTIC-ready files (only meaningful if re-run on the older JW18
@@ -53,7 +66,9 @@ python integrate.py \\
     --fig_dir results/integrated/figures \\
     --ortholog_map reference/orthologs/dmel_dsim_orthologs_rbh.tsv \\
     --optimize_resolution \\
-    --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
+    --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5 \\
+    --projection_k 30 \\
+    --projection_harmony_vars dataset method
 """
 
 import os
@@ -100,6 +115,42 @@ def _sanitize_obs(adata):
     for col in adata.obs.columns:
         if adata.obs[col].dtype == object or str(adata.obs[col].dtype) == "category":
             adata.obs[col] = adata.obs[col].astype(str).replace("nan", "NA")
+    return adata
+
+
+def _remove_bacterial_and_filter(adata, min_genes, min_cells, label=""):
+    """Shared QC step: strip Wolbachia/rRNA transcripts, then apply the same
+    cell/gene filtering used everywhere in this pipeline. Factored out of
+    preprocess() so the embryo reference (via preprocess()) and the cell
+    line query cells (via project_celllines_onto_reference(), which does its
+    own HVG/PCA/Harmony rather than calling preprocess()) go through
+    identical QC before either side is clustered or projected."""
+    bacteria_mask = (
+        adata.var_names.str.startswith("GQX67") |
+        adata.var_names.str.startswith("16S_")
+        )
+    n_bac = bacteria_mask.sum()
+    print(f"  [{label}] Removing {n_bac} bacterial transcripts (GQX67* + 16S_*)"
+          " before PCA")
+    adata = adata[:, ~bacteria_mask].copy()
+
+    if scipy.sparse.issparse(adata.X):
+        adata.X.eliminate_zeros()
+
+    sc.pp.filter_cells(adata, min_genes=min_genes)
+    sc.pp.filter_cells(adata, min_counts=1)
+    sc.pp.filter_genes(adata, min_cells=min_cells)
+    sc.pp.filter_genes(adata, min_counts=1)
+
+    if scipy.sparse.issparse(adata.X):
+        adata.X = adata.X.toarray()
+    adata.X = np.nan_to_num(adata.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+
+    cell_sums = adata.X.sum(axis=1)
+    gene_sums = adata.X.sum(axis=0)
+    adata = adata[cell_sums > 0].copy()
+    adata = adata[:, gene_sums > 0].copy()
+    print(f"  [{label}] After filtering: {adata.n_obs} cells, {adata.n_vars} genes")
     return adata
 
 
@@ -217,33 +268,7 @@ def add_metadata(adata, batch_key):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def preprocess(adata, min_genes, min_cells, n_pcs, n_top_genes=2000):
-    # Remove bacterial / rRNA genes
-    bacteria_mask = (
-        adata.var_names.str.startswith("GQX67") |
-        adata.var_names.str.startswith("16S_")
-        )
-    
-    n_bac = bacteria_mask.sum()
-    print(f"  Removing {n_bac} bacterial transcripts (GQX67* + 16S_*) before PCA")
-    adata = adata[:, ~bacteria_mask].copy()
-
-    if scipy.sparse.issparse(adata.X):
-        adata.X.eliminate_zeros()
-
-    sc.pp.filter_cells(adata, min_genes=min_genes)
-    sc.pp.filter_cells(adata, min_counts=1)
-    sc.pp.filter_genes(adata, min_cells=min_cells)
-    sc.pp.filter_genes(adata, min_counts=1)
-
-    if scipy.sparse.issparse(adata.X):
-        adata.X = adata.X.toarray()
-    adata.X = np.nan_to_num(adata.X.astype(np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-
-    cell_sums = adata.X.sum(axis=1)
-    gene_sums = adata.X.sum(axis=0)
-    adata = adata[cell_sums > 0].copy()
-    adata = adata[:, gene_sums > 0].copy()
-    print(f"  After filtering: {adata.n_obs} cells, {adata.n_vars} genes")
+    adata = _remove_bacterial_and_filter(adata, min_genes, min_cells, label="embryo_reference")
 
     # ── Flag QC gene classes BEFORE any subsetting ────────────────────────────
     # Drosophila mitochondrial genes: "mt:" prefix (FlyBase convention)
@@ -454,10 +479,10 @@ def optimize_leiden_resolution(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Joint clustering
+# Stage 1 — build the combined embryo reference
 # ─────────────────────────────────────────────────────────────────────────────
 
-def cluster_all(
+def build_embryo_reference(
     adata,
     batch_key,
     min_genes,
@@ -470,23 +495,31 @@ def cluster_all(
     leiden_resolution=0.5,
 ):
     """
-    Cluster all cells together after correcting for method only.
+    Combine every embryo sample (all embryo conditions/replicates/methods)
+    into one shared, clustered reference space. `adata` must already be
+    restricted to embryo cells only (obs['is_embryo'] all True) — primary
+    cell line cells are NOT clustered here; they're projected onto this
+    reference afterwards by project_celllines_onto_reference().
 
     Steps:
-      1. Preprocess (filter, HVG, PCA)
-      2. BBKNN — correct for 10X vs PIPseq only
+      1. Preprocess (filter, HVG, PCA) — embryo cells only
+      2. Harmony — correct for 10X vs PIPseq + replicate only
       3. UMAP
       4. Leiden clustering (optimised or fixed resolution)
 
-    Biological variation (cell line, timepoint, titer) is NOT corrected —
-    it drives the clustering and is visible in the embedding.
+    Biological variation (embryo condition, Wolbachia titer, cell type) is
+    NOT corrected — it drives the clustering and is visible in the
+    embedding. This is deliberately the same technical-only correction the
+    old joint-clustering step used, just now scoped to embryo cells so
+    embryo conditions merge into one reference instead of being diluted by
+    the much larger transcriptional gap to cultured cell lines.
     """
     print("\n" + "=" * 60)
-    print("JOINT CLUSTERING — all conditions, method correction only")
+    print("STAGE 1 — COMBINING EMBRYO DATASETS INTO ONE REFERENCE")
     print("=" * 60)
 
-    print(f"\nTotal cells: {adata.n_obs}")
-    print("Condition breakdown:")
+    print(f"\nTotal embryo cells: {adata.n_obs}")
+    print("Embryo condition breakdown:")
     print(adata.obs["bio_condition"].value_counts().to_string())
     print("\nMethod breakdown:")
     print(adata.obs["method"].value_counts().to_string())
@@ -499,13 +532,12 @@ def cluster_all(
     sc.pp.neighbors(tmp, n_pcs=n_pcs)
     sc.tl.umap(tmp)
     sc.pl.umap(tmp, color=["method", "bio_condition"],
-               save=f"_{sample}_before_correction.pdf", ncols=2,
-               title=["Method (pre-correction)", "Bio condition (pre-correction)"])
+               save=f"_{sample}_embryo_ref_before_correction.pdf", ncols=2,
+               title=["Method (pre-correction)", "Embryo condition (pre-correction)"])
     del tmp
 
-    # BBKNN: correct for method only
-    print("\nRunning BBKNN (batch_key='method') …")
-    # Harmony: corrects PCA embedding for both method and replicate simultaneously.
+    # Harmony: corrects PCA embedding for method and replicate simultaneously.
+    print("\nRunning Harmony (vars_use=['method', 'replicate']) …")
     import harmonypy
     ho = harmonypy.run_harmony(
         adata.obsm["X_pca"][:, :n_pcs],
@@ -519,12 +551,11 @@ def cluster_all(
     sc.tl.umap(adata)
 
     # Post-correction QC
-    sc.pl.umap(adata, color=["method", "bio_condition", "cell_line", "is_embryo"],
-               save=f"_{sample}_after_correction.pdf", ncols=2,
+    sc.pl.umap(adata, color=["method", "bio_condition", "cell_line"],
+               save=f"_{sample}_embryo_ref_after_correction.pdf", ncols=2,
                title=["Method (should overlap post-correction)",
-                      "Bio condition (should still separate)",
-                      "Cell line / condition",
-                      "Embryo vs. cell line"])
+                      "Embryo condition (should still separate)",
+                      "Cell line / condition"])
 
     # Resolution optimisation
     if optimize_resolution:
@@ -543,16 +574,216 @@ def cluster_all(
 
     # Core UMAPs
     sc.pl.umap(adata, color=["leiden", "bio_condition", "method", "cell_line"],
-               save=f"_{sample}_clusters.pdf", ncols=2, legend_loc="on data",
-               title=["Leiden clusters", "Bio condition", "Method", "Cell line"])
+               save=f"_{sample}_embryo_ref_clusters.pdf", ncols=2, legend_loc="on data",
+               title=["Leiden clusters (embryo reference)", "Embryo condition",
+                      "Method", "Cell line"])
 
     if "wolbachia_titer" in adata.obs.columns:
         vmax = float(adata.obs["wolbachia_titer"].quantile(0.95))
         sc.pl.umap(adata, color="wolbachia_titer", vmax=vmax, cmap="viridis",
-                   save=f"_{sample}_titer.pdf",
-                   title="Wolbachia titer")
+                   save=f"_{sample}_embryo_ref_titer.pdf",
+                   title="Wolbachia titer (embryo reference)")
 
     return adata, final_resolution
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 — project primary cell lines onto the embryo reference
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _knn_transfer_leiden(combined, ref_mask, ref_leiden_labels, k):
+    """Majority-vote KNN transfer of a single label array from reference
+    cells onto query cells, in combined.obsm['X_pca_harmony'] space.
+    Returns (transferred_labels, confidence) arrays for the query cells."""
+    from sklearn.neighbors import NearestNeighbors
+
+    ref_pca   = combined.obsm["X_pca_harmony"][ref_mask]
+    query_pca = combined.obsm["X_pca_harmony"][~ref_mask]
+
+    k = min(k, ref_pca.shape[0])
+    nbrs = NearestNeighbors(n_neighbors=k, metric="euclidean", n_jobs=-1)
+    nbrs.fit(ref_pca)
+    _, indices = nbrs.kneighbors(query_pca)
+
+    ref_labels_arr = np.asarray(ref_leiden_labels)
+    transferred, confidence = [], []
+    for row_idx in indices:
+        neighbour_labels = ref_labels_arr[row_idx]
+        counts = pd.Series(neighbour_labels).value_counts()
+        transferred.append(counts.index[0])
+        confidence.append(counts.iloc[0] / k)
+
+    return np.array(transferred), np.array(confidence)
+
+
+def project_celllines_onto_reference(
+    cellline_adata,
+    embryo_ref_raw,
+    min_genes,
+    min_cells,
+    n_pcs,
+    k,
+    harmony_vars,
+    n_top_genes,
+    fig_dir,
+    sample,
+):
+    """
+    Project primary cell line cells onto the already-clustered embryo
+    reference, rather than re-clustering every cell together from scratch.
+
+    Mirrors the same reference-vs-query Harmony + KNN recipe rule
+    map_celllines_to_embryo already uses upstream for atlas cell-type
+    transfer (see map_cellline_to_embryo.py) — one batch-correction problem
+    (embryo vs. cell line), not a joint re-clustering of everything at once
+    — but here the label being transferred is the reference's own Leiden
+    CLUSTER call (embryo_ref_raw.obs['leiden'], set by
+    build_embryo_reference) rather than an atlas cell-type label.
+
+    `embryo_ref_raw` must be RAW counts (not the scaled/HVG-subset object
+    build_embryo_reference returns) restricted to the cells that survived
+    its QC, with an obs['leiden'] column already attached — see integrate()
+    for how this is constructed.
+
+    Steps:
+      1. QC-filter the cell line cells the same way the embryo cells were
+         filtered (bacterial transcripts, min_genes/min_cells).
+      2. Concatenate with the embryo reference cells on raw counts.
+      3. Jointly select HVGs (seurat_v3, batch_key='dataset') -> normalise
+         -> log1p -> scale -> PCA -> Harmony (batch = embryo_reference vs.
+         cellline_query, + method).
+      4. KNN in Harmony PCA space: each cell line cell gets the
+         majority-vote Leiden label from its k nearest EMBRYO REFERENCE
+         cells (confidence = winning fraction of k neighbours). Reference
+         cells keep their own Leiden call, unchanged.
+      5. Compute one shared UMAP on the combined Harmony embedding so
+         reference and projected cell line cells can be plotted together.
+
+    Returns a single AnnData with every embryo reference cell plus every
+    cell line cell, obs['leiden'] populated for both (own value for
+    reference cells, KNN-transferred value for cell line cells), and
+    obs['leiden_confidence'] set (NaN for reference cells) so low-confidence
+    projections can be flagged/filtered downstream.
+    """
+    print("\n" + "=" * 60)
+    print("STAGE 2 — PROJECTING CELL LINES ONTO THE EMBRYO REFERENCE")
+    print("=" * 60)
+    os.makedirs(fig_dir, exist_ok=True)
+    sc.settings.figdir = fig_dir
+
+    print(f"\nCell line cells before QC: {cellline_adata.n_obs}")
+    cellline_adata = _remove_bacterial_and_filter(
+        cellline_adata, min_genes, min_cells, label="cellline_query")
+
+    ref_raw = embryo_ref_raw.copy()
+    ref_raw.obs["dataset"]     = "embryo_reference"
+    cellline_adata.obs["dataset"] = "cellline_query"
+
+    combined = ad.concat([ref_raw, cellline_adata], join="outer", index_unique=None)
+    if scipy.sparse.issparse(combined.X):
+        combined.X = combined.X.tocsr()
+    else:
+        combined.X = scipy.sparse.csr_matrix(combined.X)
+
+    ref_mask = (combined.obs["dataset"] == "embryo_reference").values
+    print(f"\nCombined: {combined.n_obs} cells x {combined.n_vars} genes")
+    print(f"Embryo reference: {ref_mask.sum()}  Cell line query: {(~ref_mask).sum()}")
+
+    print(f"\nHighly variable genes (seurat_v3, batch_key='dataset', "
+          f"n_top_genes={n_top_genes}) …")
+    sc.pp.highly_variable_genes(
+        combined, flavor="seurat_v3", n_top_genes=n_top_genes,
+        batch_key="dataset", subset=False,
+    )
+    print(f"HVGs selected: {combined.var['highly_variable'].sum()}")
+
+    print("Normalising (1e4 per cell) + log1p …")
+    sc.pp.normalize_total(combined, target_sum=1e4)
+    sc.pp.log1p(combined)
+    if scipy.sparse.issparse(combined.X):
+        combined.X = combined.X.toarray()
+    combined.X = np.nan_to_num(combined.X, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Keep the full (non-HVG-subset) log-normalised matrix for .raw, matching
+    # preprocess()'s own convention (adata.raw = full log-normalised genes).
+    combined_full = combined.copy()
+
+    combined = combined[:, combined.var["highly_variable"]].copy()
+
+    print("Scaling (max_value=10) …")
+    sc.pp.scale(combined, max_value=10)
+
+    print(f"PCA ({n_pcs} components) …")
+    sc.tl.pca(combined, n_comps=n_pcs, svd_solver="arpack")
+
+    valid_harmony_vars = [v for v in harmony_vars if v in combined.obs.columns]
+    missing = set(harmony_vars) - set(valid_harmony_vars)
+    if missing:
+        print(f"  WARNING: harmony_vars {sorted(missing)} not in obs -- dropping")
+    if not valid_harmony_vars:
+        raise ValueError("No valid harmony_vars remain for the cell line "
+                          "projection step -- cannot run Harmony")
+    for v in valid_harmony_vars:
+        combined.obs[v] = combined.obs[v].astype(str).fillna("unknown")
+
+    print(f"Harmony correction on: {valid_harmony_vars} …")
+    import harmonypy
+    ho = harmonypy.run_harmony(
+        combined.obsm["X_pca"], combined.obs, valid_harmony_vars,
+        max_iter_harmony=30, random_state=42,
+    )
+    combined.obsm["X_pca_harmony"] = ho.Z_corr.T
+
+    print(f"\nKNN label transfer (k={k}) …")
+    ref_leiden = combined.obs.loc[combined.obs_names[ref_mask], "leiden"].astype(str).values
+    transferred, confidence = _knn_transfer_leiden(combined, ref_mask, ref_leiden, k=k)
+
+    leiden_final = np.empty(combined.n_obs, dtype=object)
+    leiden_final[ref_mask]  = ref_leiden
+    leiden_final[~ref_mask] = transferred
+    combined.obs["leiden"] = pd.Categorical(leiden_final)
+
+    conf_final = np.full(combined.n_obs, np.nan)
+    conf_final[~ref_mask] = confidence
+    combined.obs["leiden_confidence"] = conf_final
+
+    print("\nTransferred cluster distribution (cell line cells):")
+    print(pd.Series(transferred).value_counts().sort_index().to_string())
+    mean_conf = float(np.mean(confidence)) if len(confidence) else float("nan")
+    print(f"Mean KNN confidence: {mean_conf:.3f}")
+    low_conf = float(np.mean(confidence < 0.5)) if len(confidence) else 0.0
+    if low_conf > 0.2:
+        print(f"  WARNING: {low_conf*100:.1f}% of cell line cells have KNN "
+              "confidence < 0.5 -- consider raising --projection_k, adding "
+              "more --projection_harmony_vars, or reviewing how well the "
+              "embryo reference clusters separate")
+
+    print("\nComputing shared UMAP on combined Harmony embedding …")
+    sc.pp.neighbors(combined, use_rep="X_pca_harmony", n_pcs=n_pcs)
+    sc.tl.umap(combined)
+
+    combined.raw = combined_full[combined.obs_names].copy()
+
+    # ── QC plots ─────────────────────────────────────────────────────────
+    combined.obs["_dataset_display"] = np.where(
+        ref_mask, "embryo_reference", "cellline_query")
+    sc.pl.umap(combined, color=["_dataset_display", "leiden", "bio_condition", "is_embryo"],
+               save=f"_{sample}_projection_overview.pdf", ncols=2,
+               title=["Embryo reference vs. projected cell lines", "Leiden cluster",
+                      "Bio condition", "Embryo vs. cell line"])
+    combined.obs.drop(columns=["_dataset_display"], inplace=True)
+
+    if len(confidence):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(confidence, bins=30, color="#2196F3", edgecolor="black", alpha=0.8)
+        ax.axvline(mean_conf, color="red", linestyle="--", label=f"mean={mean_conf:.2f}")
+        ax.set_xlabel("KNN confidence (cell line -> embryo reference cluster)")
+        ax.set_ylabel("Cell line cells")
+        ax.set_title(f"Cell line cluster-projection confidence (k={k}) — {sample}")
+        ax.legend()
+        _savefig(fig, os.path.join(fig_dir, f"projection_confidence_hist_{sample}.pdf"))
+
+    return combined
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -927,9 +1158,15 @@ def integrate(
     resolutions=None,
     leiden_resolution=0.5,
     ortholog_map=None,
+    projection_k=30,
+    projection_harmony_vars=None,
+    projection_n_top_genes=3000,
 ):
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
+
+    if projection_harmony_vars is None:
+        projection_harmony_vars = ["dataset", "method"]
 
     dsim_to_dmel, dsim_ids, dmel_ids = (
         load_ortholog_map(ortholog_map) if ortholog_map else ({}, set(), set())
@@ -1028,9 +1265,29 @@ def integrate(
     print("Condition breakdown:")
     print(adata.obs["bio_condition"].value_counts().to_string())
 
-    # ── Joint clustering ──────────────────────────────────────────────────────
-    adata, final_resolution = cluster_all(
-        adata,
+    # ── Split embryo vs. primary cell line cells ──────────────────────────────
+    # obs['is_embryo'] was set in add_metadata() from the condition name (see
+    # its docstring). Embryo cells get combined into one reference (Stage 1);
+    # cell line cells are then projected into that reference (Stage 2) rather
+    # than all cells being re-clustered together from scratch.
+    embryo_mask = adata.obs["is_embryo"].astype(bool).values
+    embryo_adata   = adata[embryo_mask].copy()
+    cellline_adata = adata[~embryo_mask].copy()
+    print(f"\nEmbryo cells: {embryo_adata.n_obs:,}   "
+          f"Cell line cells: {cellline_adata.n_obs:,}")
+
+    if embryo_adata.n_obs == 0:
+        raise ValueError(
+            "No embryo cells found (obs['is_embryo'] is all False) -- cannot "
+            "build an embryo reference to project cell lines onto. Check "
+            "that samples.csv condition names contain 'embryo' for embryo "
+            "samples."
+        )
+
+    # ── Stage 1: combine the embryo datasets into one reference ────────────────
+    embryo_raw_full = embryo_adata.copy()  # raw counts, kept for Stage 2
+    ref_adata, final_resolution = build_embryo_reference(
+        embryo_adata,
         batch_key=batch_key,
         min_genes=min_genes,
         min_cells=min_cells,
@@ -1041,6 +1298,31 @@ def integrate(
         resolutions=resolutions,
         leiden_resolution=leiden_resolution,
     )
+    # Raw counts for exactly the cells that survived Stage 1's QC, tagged
+    # with their final Leiden call -- this (not the scaled/HVG-subset
+    # ref_adata) is what Stage 2 needs to jointly reprocess with the cell
+    # line raw counts.
+    embryo_ref_raw = embryo_raw_full[ref_adata.obs_names].copy()
+    embryo_ref_raw.obs["leiden"] = ref_adata.obs["leiden"].values
+
+    # ── Stage 2: project cell lines onto the embryo reference ──────────────────
+    if cellline_adata.n_obs == 0:
+        print("\nNo cell line cells found -- skipping projection step; "
+              "the integrated object is the embryo reference alone.")
+        adata = ref_adata
+    else:
+        adata = project_celllines_onto_reference(
+            cellline_adata,
+            embryo_ref_raw,
+            min_genes=min_genes,
+            min_cells=min_cells,
+            n_pcs=n_pcs,
+            k=projection_k,
+            harmony_vars=projection_harmony_vars,
+            n_top_genes=projection_n_top_genes,
+            fig_dir=fig_dir,
+            sample=sample,
+        )
 
     # ── Condition enrichment ──────────────────────────────────────────────────
     analyze_condition_enrichment(adata, fig_dir, sample)
@@ -1101,6 +1383,21 @@ def main():
                              "var_names remapped to the orthologous Dmel FlyBase "
                              "ID before integration. If omitted, no remapping is "
                              "done.")
+    parser.add_argument("--projection_k", type=int, default=30,
+                        help="Number of nearest embryo-reference neighbours "
+                             "used for majority-vote Leiden cluster transfer "
+                             "onto each cell line cell (Stage 2).")
+    parser.add_argument("--projection_harmony_vars", nargs="+",
+                        default=["dataset", "method"],
+                        help="obs columns Harmony corrects for when jointly "
+                             "reprocessing embryo reference + cell line query "
+                             "cells in Stage 2 (default matches rule "
+                             "map_celllines_to_embryo's own cellline_embryo_"
+                             "harmony_vars).")
+    parser.add_argument("--projection_n_top_genes", type=int, default=3000,
+                        help="Number of HVGs (seurat_v3, batch_key='dataset') "
+                             "selected jointly on embryo reference + cell line "
+                             "query raw counts in Stage 2.")
 
     args = parser.parse_args()
 
@@ -1117,6 +1414,9 @@ def main():
         resolutions=args.resolutions,
         leiden_resolution=args.resolution,
         ortholog_map=args.ortholog_map,
+        projection_k=args.projection_k,
+        projection_harmony_vars=args.projection_harmony_vars,
+        projection_n_top_genes=args.projection_n_top_genes,
     )
 
 
