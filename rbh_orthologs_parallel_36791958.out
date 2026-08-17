@@ -1,0 +1,67 @@
+Sun Aug 16 04:46:58 PM PDT 2026
+phoenix-08.prism
+/private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines
+=== memory ===
+               total        used        free      shared  buff/cache   available
+Mem:           2.0Ti        11Gi       1.9Ti       239Mi        21Gi       1.9Ti
+Swap:           31Gi       518Mi        31Gi
+Using local scratch: /data/tmp/dmel_dsim_rbh_par_36791958
+Filesystem        Size  Used Avail Use% Mounted on
+/dev/mapper/data   14T  1.3T   13T   9% /data
+Threads per parallel diamond job: 32 (of 64 total)
+=== copying inputs to local scratch (parallel) ===
+===== [copy dmel fasta] log =====
+--- [copy dmel fasta] starting (Sun Aug 16 04:46:58 PM PDT 2026)
+--- [copy dmel fasta] done (Sun Aug 16 04:47:00 PM PDT 2026)
+===== [copy dmel gtf] log =====
+--- [copy dmel gtf] starting (Sun Aug 16 04:46:58 PM PDT 2026)
+--- [copy dmel gtf] done (Sun Aug 16 04:46:59 PM PDT 2026)
+===== [copy dsim fasta] log =====
+--- [copy dsim fasta] starting (Sun Aug 16 04:46:58 PM PDT 2026)
+--- [copy dsim fasta] done (Sun Aug 16 04:47:00 PM PDT 2026)
+===== [copy dsim gtf] log =====
+--- [copy dsim gtf] starting (Sun Aug 16 04:46:58 PM PDT 2026)
+--- [copy dsim gtf] done (Sun Aug 16 04:47:00 PM PDT 2026)
+=== gffread extraction (parallel) ===
+===== [gffread dmel] log =====
+--- [gffread dmel] starting (Sun Aug 16 04:47:06 PM PDT 2026)
+FASTA index file dmel_genome.fasta.fai created.
+--- [gffread dmel] done (Sun Aug 16 04:47:08 PM PDT 2026)
+===== [gffread dsim] log =====
+--- [gffread dsim] starting (Sun Aug 16 04:47:06 PM PDT 2026)
+FASTA index file dsim_genome.fasta.fai created.
+--- [gffread dsim] done (Sun Aug 16 04:47:09 PM PDT 2026)
+gffread extracted 30845 dmel proteins, 26225 dsim proteins
+[dmel.gtf] 35736 total id -> gene_id pairs (531707 transcript_id rows, 0 protein_id rows seen)
+NOTE: no protein_id attribute found in this GTF -- gffread -y will fall back to transcript_id for FASTA headers here, which this map already covers.
+[dsim.gtf] 55015 total id -> gene_id pairs (427044 transcript_id rows, 213423 protein_id rows seen)
+=== diamond makedb (parallel, 32 threads each) ===
+===== [diamond makedb dmel] log =====
+--- [diamond makedb dmel] starting (Sun Aug 16 04:47:14 PM PDT 2026)
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 32
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Database input file: dmel_proteins.fasta
+Opening the database file...  [0s]
+Loading sequences... ERROR: [diamond makedb dmel] timed out after 30m with no progress.
+  Host: phoenix-08.prism  Scratch: /data/tmp/dmel_dsim_rbh_par_36791958
+Filesystem        Size  Used Avail Use% Mounted on
+/dev/mapper/data   14T  1.3T   13T   9% /data
+ERROR: [diamond makedb dmel] failed (exit 124)
+===== [diamond makedb dsim] log =====
+--- [diamond makedb dsim] starting (Sun Aug 16 04:47:14 PM PDT 2026)
+diamond v2.2.5.185 (C) Max Planck Society for the Advancement of Science, Benjamin J. Buchfink, University of Tuebingen
+Documentation, support and updates available at http://www.diamondsearch.org
+Please cite: http://dx.doi.org/10.1038/s41592-021-01101-x Nature Methods (2021)
+
+#CPU threads: 32
+Scoring parameters: (Matrix=BLOSUM62 Lambda=0.267 K=0.041 Penalties=11/1)
+Database input file: dsim_proteins.fasta
+Opening the database file...  [0s]
+Loading sequences... Error: Invalid character in sequence: '.'
+ERROR: [diamond makedb dsim] failed with exit code 1 (Sun Aug 16 04:47:15 PM PDT 2026)
+ERROR: [diamond makedb dsim] failed (exit 1)
+ERROR: one or more parallel steps above failed -- aborting.
