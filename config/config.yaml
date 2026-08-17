@@ -184,7 +184,7 @@ validate_time: "8:00:00"
 # cellcycle_mem: 64000
 # cellcycle_time: "8:00:00"
 
-integrate_script: scripts/method_comparison/integrate_v2.py  # Changed to v2 on 3/25/26
+integrate_script: "snakemake_scripts/method_comparison/integrate_v2.py"  # Changed to v2 on 3/25/26, updated 8/17/26
 integrate_threads: 16
 integrate_partition: "medium"
 integrate_mem: 128000
