@@ -948,8 +948,12 @@ rule map_celllines_to_embryo:
         k            = config.get("cellline_embryo_k", 30),
         n_pcs        = config.get("cellline_embryo_n_pcs", 30),
         harmony_vars = config.get("cellline_embryo_harmony_vars", ["dataset", "method"]),
+        # map_cellline_to_embryo.py's --label_cols expects the actual
+        # atlas_<label> column names rule annotate_with_atlas wrote (not
+        # the bare atlas_label_cols entries used for that rule's own
+        # --label_cols flag), so prefix each one with "atlas_" here.
         label_cols_flag = (
-            "--label_cols " + " ".join(config["atlas_label_cols"])
+            "--label_cols " + " ".join(f"atlas_{c}" for c in config["atlas_label_cols"])
             if config.get("atlas_label_cols") else ""
         ),
     log:
