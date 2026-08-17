@@ -999,17 +999,25 @@ def integrate(
         a_conf, e_conf = f"{a_col}_confidence", f"{e_col}_confidence"
         out_col, out_conf = f"cell_type_{col}", f"cell_type_{col}_confidence"
 
+        # ad.concat turns these into Categoricals whose category lists
+        # differ between the embryo-only and cell-line-only halves of the
+        # object (each only ever saw the label values that occur in its own
+        # cells) -- Series.where() refuses to combine two Categoricals with
+        # different category sets ("Cannot set a Categorical with another,
+        # without identical categories"), so cast to plain object first.
         if e_col in adata.obs.columns:
-            adata.obs[out_col] = adata.obs[a_col].where(
-                adata.obs[a_col].notna(), adata.obs[e_col])
+            a_series = adata.obs[a_col].astype(object)
+            e_series = adata.obs[e_col].astype(object)
+            adata.obs[out_col] = a_series.where(a_series.notna(), e_series)
         else:
-            adata.obs[out_col] = adata.obs[a_col]
+            adata.obs[out_col] = adata.obs[a_col].astype(object)
 
         conf_parts = [c for c in (a_conf, e_conf) if c in adata.obs.columns]
         if conf_parts:
-            conf = adata.obs[conf_parts[0]]
+            conf = adata.obs[conf_parts[0]].astype(float)
             for c in conf_parts[1:]:
-                conf = conf.where(conf.notna(), adata.obs[c])
+                other = adata.obs[c].astype(float)
+                conf = conf.where(conf.notna(), other)
             adata.obs[out_conf] = conf
 
         n_labelled = adata.obs[out_col].notna().sum()
