@@ -93,8 +93,8 @@ wolbachia_genome:
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wMel/GCF_000008025.1_ASM802v1.gtf"}
   wRi_Riv84: {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1_genomic.fna",
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_Riv84/GCF_000022285.1_ASM2228v1.gtf"}
-  wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_GCA_979474595.1.fna",
-              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/wRi_M23_v3.gtf"}
+  wRi_M23:   {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/GCA_979474595.2_wRi_Merrill23_genomic.fna",
+              gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/GCA_979474595.2_wRi_Merrill23_genomic.gtf"}
   wWil:      {fasta: "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12_genomic.fna",
               gtf:   "/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wWil/GCF_040084705.1_2024-09-12.gtf"}
 
