@@ -145,8 +145,19 @@ conda activate "$KALLISTO_ENV"
 grep -v 'transcript_id ""' dmel.gtf > dmel_filtered.gtf
 grep -v 'transcript_id ""' dsim.gtf > dsim_filtered.gtf
 
-run_step 20m "gffread dmel" gffread dmel_filtered.gtf -g dmel_genome.fasta -y dmel_proteins.fasta
-run_step 20m "gffread dsim" gffread dsim_filtered.gtf -g dsim_genome.fasta -y dsim_proteins.fasta
+run_step 20m "gffread dmel" gffread dmel_filtered.gtf -g dmel_genome.fasta -y dmel_proteins.raw.fasta
+run_step 20m "gffread dsim" gffread dsim_filtered.gtf -g dsim_genome.fasta -y dsim_proteins.raw.fasta
+
+# gffread inserts non-standard placeholder characters (most commonly
+# '.') for CDS regions it can't cleanly translate -- typically an
+# incomplete/partial codon at the edge of a partial gene model, common
+# in whole-genome NCBI/Gnomon annotations like dsim's. DIAMOND doesn't
+# accept those and hard-fails ("Invalid character in sequence: '.'")
+# on the whole file. Also re-wraps to a fixed line width as a defensive
+# measure/diagnostic (see sanitize_protein_fasta.py's docstring for the
+# 2026-08-16 dmel `diamond makedb` hang this was investigating).
+run_step 5m "sanitize dmel proteins" python "$SCRIPT_DIR/sanitize_protein_fasta.py" dmel_proteins.raw.fasta dmel_proteins.fasta
+run_step 5m "sanitize dsim proteins" python "$SCRIPT_DIR/sanitize_protein_fasta.py" dsim_proteins.raw.fasta dsim_proteins.fasta
 
 # Fail loudly here rather than silently handing diamond an empty/tiny
 # proteome -- cheap sanity check given how easy this is to miss (this

@@ -87,6 +87,7 @@ same ID namespace as this table's `Dsim` column.
 | `run_rbh_orthologs.sbatch` | SLURM pipeline: gffread protein extraction, DIAMOND makedb, reciprocal blastp, RBH filtering (dmel/dsim steps run sequentially) |
 | `run_rbh_orthologs_parallel.sbatch` | Same pipeline; the independent dmel/dsim branches of each stage (copy, gffread, makedb, blastp) run concurrently as background jobs instead of one after another, each diamond job getting half of `$SLURM_CPUS_PER_TASK` |
 | `gtf_id_map.py` | Extracts protein_id/transcript_id → gene_id from any GTF's attribute column (FlyBase or NCBI/Gnomon) |
+| `sanitize_protein_fasta.py` | Replaces non-standard characters in a gffread protein FASTA with `X` and re-wraps to a fixed line width, run on both proteomes right after gffread and before diamond |
 | `get_id_map.py` | Legacy: extracts protein_id → FBgn from a FlyBase translation FASTA header (`parent=FBgn...`) — only usable if you have that kind of FASTA for both species |
 | `filter_rbh.py` | Collapses two one-directional best-hit tables into gene-level reciprocal best hits |
 | `README.md` | This file |
@@ -155,6 +156,35 @@ improvement on top of the same pipeline. If a run still fails, the
 `.out` log's per-branch labels are exactly what's needed to diagnose
 further (which branch, timeout vs. real error, at what point).
 
+### Protein FASTA sanitization (important)
+
+Both `gffread -y` outputs are passed through `sanitize_protein_fasta.py`
+before diamond ever sees them. Two real, confirmed problems drove this:
+
+1. **DIAMOND hard-fails on non-standard characters.** gffread inserts
+   `.` (not a valid amino acid code) for CDS regions it can't cleanly
+   translate -- typically an incomplete/partial codon at the edge of a
+   partial gene model. The dsim proteome (NCBI/Gnomon, which has many
+   partial models) triggered this immediately:
+   `Error: Invalid character in sequence: '.'`. The sanitizer replaces
+   any character outside the standard protein alphabet with `X`
+   (matching what `.` already meant: unknown residue) and reports how
+   many characters/sequences were affected.
+2. **The dmel-side `diamond makedb` hang** (see Node-local scratch
+   section above) turned out to reproduce independent of filesystem,
+   node, thread count, and concurrency -- ruling out NFS and parallel
+   resource contention as the cause and pointing at something in
+   `dmel_proteins.fasta`'s content instead. The sanitizer also re-wraps
+   every sequence to a fixed line width (60 cols) and reports the
+   longest sequence it saw, as both a defensive measure and a
+   diagnostic -- *D. melanogaster*'s sallimus/titin-like proteins can
+   be tens of thousands of residues on one unwrapped `gffread` line,
+   which is a plausible trigger for pathological behavior in a FASTA
+   reader. Check the `sanitize dmel proteins` log line for
+   `longest sequence: N aa, >header` -- if `diamond makedb` still hangs
+   after this fix, that number is the next thing to chase down (e.g.
+   whether it's abnormally large, and if so isolating that one record).
+
 ## Output
 
 `dmel_dsim_orthologs_rbh.tsv` in `WORKDIR`
@@ -170,8 +200,9 @@ further (which branch, timeout vs. real error, at what point).
 
 Intermediate files also left in `WORKDIR` (useful for debugging):
 
-- `dmel_proteins.fasta` / `dsim_proteins.fasta` — gffread-extracted
-  proteomes
+- `dmel_proteins.fasta` / `dsim_proteins.fasta` — gffread-extracted,
+  sanitized proteomes (the raw pre-sanitization `*_proteins.raw.fasta`
+  stay on local scratch and aren't copied back)
 - `dmel_id_map.tsv` / `dsim_id_map.tsv` — transcript_id → gene_id maps
 - `dmel_db.dmnd` / `dsim_db.dmnd` — DIAMOND databases
 - `dsim_vs_dmel.tsv` / `dmel_vs_dsim.tsv` — one-directional best-hit
