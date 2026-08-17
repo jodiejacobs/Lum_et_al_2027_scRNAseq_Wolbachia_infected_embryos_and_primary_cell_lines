@@ -50,10 +50,17 @@ Run with:
     mamba activate scanpy
     python snakemake_scripts/method_comparison/annotate_with_flysta3d.py \\
         --atlas resources/wcoembed_whole_embeding_downsampled_modified.h5ad \\
-        --query results/filtered_h5ad/*.h5ad \\
-        --out_dir results/filtered_h5ad_annotated \\
+        --query results/filtered_h5ad/*embryos*.h5ad \\
+        --out_dir results/embryo_annotated \\
         --label_cols cell_type tissue germ_layer \\
-        --flybase_annotation reference/fbgn_annotation_ID_fb_2025_04.tsv.gz
+        --flybase_annotation reference/fbgn_annotation_ID_fb_2025_04.tsv.gz \\
+        --ortholog_map reference/orthologs/dmel_dsim_orthologs_rbh.tsv
+
+Only pass your EMBRYO query files here (this atlas is embryo-specific --
+transferring embryo cell-type labels onto cultured primary cell lines
+directly doesn't make biological sense). Primary cell line samples get
+their cell-type label via map_cellline_to_embryo.py instead, which maps
+them onto these already-annotated embryo cells.
 
 First run without --label_cols to see what's actually in the atlas obs --
 the script will print every candidate column and exit before doing any
@@ -74,6 +81,66 @@ import harmonypy as hm
 
 
 FBGN_RE = re.compile(r"^FBgn\d{7,8}$")
+
+
+# -----------------------------------------------------------------------------
+# Dsim -> Dmel ortholog remapping (same recipe as integrate_v2.py). The
+# Flysta3D-v2 atlas is Dmel-indexed (FBgn, after harmonise_atlas_gene_ids
+# below), but several of our own query samples are D. simulans (quantified
+# against the Dsim genome, so their var_names are Dsim NCBI/Gnomon IDs, e.g.
+# "LOC120284240" -- a different namespace entirely). Left unmapped, every
+# Dsim query cell would look like it has ~0 genes in common with the atlas
+# once restricted to shared var_names, and the label transfer below would be
+# meaningless for those cells. Remap each Dsim query file's var_names onto
+# the orthologous Dmel FlyBase ID (reciprocal-best-hit table) before
+# concatenation, exactly like integrate_v2.py does for the final integration
+# step -- this keeps every query file, Dmel or Dsim, embryo or cell line, in
+# the same Dmel FBgn gene-ID space the atlas already uses.
+# -----------------------------------------------------------------------------
+
+def load_ortholog_map(path):
+    """Load a Dsim -> Dmel FlyBase ID reciprocal-best-hit ortholog table.
+
+    Expects tab-separated columns Dsim, Dmel (extra columns like pident/
+    evalue/bitscore are ignored). Rows where a Dsim or Dmel ID appears more
+    than once are dropped so the mapping stays strictly 1:1.
+
+    Returns (dsim_to_dmel dict, dsim_ids set, dmel_ids set).
+    """
+    df = pd.read_csv(path, sep="\t")
+    n_raw = len(df)
+    df = df.drop_duplicates(subset="Dsim", keep=False)
+    df = df.drop_duplicates(subset="Dmel", keep=False)
+    n_kept = len(df)
+    if n_kept < n_raw:
+        print(f"  Ortholog map: dropped {n_raw - n_kept}/{n_raw} non-1:1 rows from {path}")
+    dsim_to_dmel = dict(zip(df["Dsim"], df["Dmel"]))
+    print(f"  Loaded {len(dsim_to_dmel)} 1:1 Dsim->Dmel orthologs from {path}")
+    return dsim_to_dmel, set(df["Dsim"]), set(df["Dmel"])
+
+
+def _looks_like_dsim(var_names, dsim_ids, dmel_ids):
+    """Decide whether a sample's gene IDs belong to the Dsim or Dmel FlyBase
+    ID namespace, by counting how many var_names land in each side of the
+    ortholog table."""
+    vs = set(var_names)
+    n_dsim = len(vs & dsim_ids)
+    n_dmel = len(vs & dmel_ids)
+    return n_dsim > n_dmel, n_dsim, n_dmel
+
+
+def remap_dsim_to_dmel(adata, dsim_to_dmel, label=""):
+    """Rename a Dsim sample's var_names (Dsim FlyBase/NCBI IDs) to the
+    orthologous Dmel FlyBase ID, dropping genes with no 1:1 ortholog."""
+    mapped = adata.var_names.map(dsim_to_dmel)
+    keep = mapped.notna().values
+    n_total, n_kept = adata.n_vars, int(keep.sum())
+    print(f"  [{label}] Dsim->Dmel remap: {n_kept}/{n_total} genes have a "
+          f"1:1 Dmel ortholog (kept); {n_total - n_kept} dropped (no ortholog)")
+    adata = adata[:, keep].copy()
+    adata.var_names = mapped[keep].astype(str).values
+    adata.var_names_make_unique()
+    return adata
 
 
 # -----------------------------------------------------------------------------
@@ -251,7 +318,7 @@ def load_atlas_reference(atlas_path, label_cols, flybase_annotation=None,
 # Step 2 -- Load all query files' raw counts, tag by source_file
 # -----------------------------------------------------------------------------
 
-def load_query_files(query_paths):
+def load_query_files(query_paths, dsim_to_dmel=None, dsim_ids=None, dmel_ids=None):
     adatas = []
     originals = {}  # basename -> original AnnData (kept in memory for re-merge)
 
@@ -284,6 +351,15 @@ def load_query_files(query_paths):
             a.obs["method"] = adata.obs["method"].values
         if "replicate" in adata.obs.columns:
             a.obs["replicate"] = adata.obs["replicate"].values
+
+        if dsim_to_dmel:
+            is_dsim, n_dsim, n_dmel = _looks_like_dsim(a.var_names, dsim_ids, dmel_ids)
+            if is_dsim:
+                print(f"   {basename}: detected as Dsim ({n_dsim} Dsim IDs vs "
+                      f"{n_dmel} Dmel IDs among var_names) -- remapping "
+                      "var_names to Dmel orthologs before atlas comparison")
+                a = remap_dsim_to_dmel(a, dsim_to_dmel, label=basename)
+
         a.obs_names = [f"{basename}__{bc}" for bc in a.obs_names]
 
         adatas.append(a)
@@ -488,6 +564,16 @@ def main():
                          help="reference/fbgn_annotation_ID_fb_2025_04.tsv.gz "
                               "-- used to remap atlas gene symbols to FBgn IDs "
                               "if the atlas isn't already FBgn-indexed.")
+    parser.add_argument("--ortholog_map", type=str, default=None,
+                         help="TSV with Dsim/Dmel FlyBase ID columns (reciprocal "
+                              "best hit orthologs; same file passed to "
+                              "integrate_v2.py's --ortholog_map). If given, "
+                              "query files detected as Dsim (by gene ID overlap "
+                              "with this table) have their var_names remapped "
+                              "to the orthologous Dmel FlyBase ID before "
+                              "comparison against the Dmel-indexed atlas. If "
+                              "omitted, no remapping is done and Dsim query "
+                              "files will share almost no genes with the atlas.")
     parser.add_argument("--k", type=int, default=30,
                          help="Number of nearest atlas neighbours for the "
                               "majority-vote label transfer (default 30; the "
@@ -525,7 +611,12 @@ def main():
     )
     ref_obs = ref.obs.copy()
 
-    query, originals = load_query_files(query_paths)
+    dsim_to_dmel, dsim_ids, dmel_ids = (
+        load_ortholog_map(args.ortholog_map) if args.ortholog_map else ({}, set(), set())
+    )
+    query, originals = load_query_files(
+        query_paths, dsim_to_dmel=dsim_to_dmel, dsim_ids=dsim_ids, dmel_ids=dmel_ids,
+    )
 
     combined, ref_mask = joint_preprocess_and_harmony(
         ref, query, harmony_vars=args.harmony_vars,

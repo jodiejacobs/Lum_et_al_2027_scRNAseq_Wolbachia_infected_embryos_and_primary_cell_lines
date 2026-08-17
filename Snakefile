@@ -39,6 +39,18 @@ if _dupe_ids:
 # Get actual sample IDs that exist
 SAMPLE_IDS = samples_df.index.tolist()
 
+# Split samples into embryo vs. primary-cell-line datasets by condition name
+# (column 0 of samples.csv) -- "embryo" appears in every embryo condition
+# (ubkhc-wMel-embryos, Dsim-Merrill23-wRi-embryos, ...) and in none of the
+# cultured cell line conditions (JW18wMel, ubkhc, Dsim6B, Dsim6B-wMel,
+# Dsim-Merrill23, ...). Used to route embryo samples through the Flysta3D-v2
+# atlas cell-type transfer (rule annotate_with_atlas) and cell line samples
+# through the embryo-reference transfer (rule map_celllines_to_embryo)
+# before both arms feed into rule integrate.
+EMBRYO_SAMPLE_IDS = [s for s in SAMPLE_IDS
+                      if "embryo" in str(samples_df.loc[s][0]).lower()]
+CELLLINE_SAMPLE_IDS = [s for s in SAMPLE_IDS if s not in EMBRYO_SAMPLE_IDS]
+
 CONDITIONS = samples_df[0].unique().tolist()
 REPLICATES = samples_df[3].unique().tolist()
 SEQUENCING_PLATFORMS = samples_df[2].unique().tolist()
@@ -75,6 +87,8 @@ print(f"Replicates: {REPLICATES}")
 print(f"Sequencing Platforms: {SEQUENCING_PLATFORMS}")
 print(f"Sample IDs: {SAMPLE_IDS}")
 print(f"Condition-Platform combinations: {CONDITION_PLATFORM_COMBOS}")
+print(f"Embryo sample IDs: {EMBRYO_SAMPLE_IDS}")
+print(f"Cell line sample IDs: {CELLLINE_SAMPLE_IDS}")
 
 # Helper function to get fastq files for a sample
 def get_fastq_files(sample_id):
@@ -243,16 +257,12 @@ rule all:
         #        seq_platform=[p for c, p in CONDITION_PLATFORM_COMBOS]),
         # Integration
         "results/integrated/integrated.h5ad",
-        # Cell cycle for uninfected samples
-        "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-        "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
         # Validate PIPseq and 10X clustering
         "results/validate_pipseq/label_transfer_confusion_matrix.csv",
         "results/validate_pipseq/marker_gene_jaccard_matrix.csv",
         "results/validate_pipseq/pseudobulk_spearman_correlation.csv",
         # Cell cycle
         "results/cellcycle/.done",
-        "results/integrated/integrated_by_cellcycle.h5ad",
         # Cluster marker + pathway analysis
         "results/cluster_marker_pathway/wolbachia_infection_markers_top50.csv",
         expand("results/sceptic/{sample}/sceptic_results_{sample}.csv",
@@ -834,33 +844,41 @@ rule extract_abundant_16s:
         """
 
 ##################################################################
-# Flysta3D-v2 atlas cell-type label transfer
+# Flysta3D-v2 atlas cell-type label transfer (embryo samples only)
 ##################################################################
-# Runs BEFORE integrate/integrate_uninfected: transfers cell-type labels
-# from the Wang et al. 2025 Cell / Flysta3D-v2 Drosophila embryo atlas
-# (https://db.cngb.org/stomics/flysta3d-v2/) onto every filtered per-sample
-# h5ad in one joint Harmony+KNN run (see docstring in
+# Runs BEFORE integrate: transfers cell-type labels from the Wang et al.
+# 2025 Cell / Flysta3D-v2 Drosophila embryo atlas
+# (https://db.cngb.org/stomics/flysta3d-v2/) onto every EMBRYO sample's
+# filtered h5ad in one joint Harmony+KNN run (see docstring in
 # snakemake_scripts/method_comparison/annotate_with_flysta3d.py for why
-# this happens per-sample, before your own condition/timepoint integration,
-# rather than after it).
+# this happens per-sample, before your own condition integration, rather
+# than after it). Restricted to EMBRYO_SAMPLE_IDS -- the atlas is a
+# whole-embryo atlas, so cell-type identification against it only makes
+# sense for embryo samples; primary cell line samples get their cell type
+# via rule map_celllines_to_embryo below instead, which maps them onto
+# these already-annotated embryo cells rather than the atlas directly.
+# D. simulans embryo samples (var_names in the Dsim NCBI/Gnomon namespace)
+# are remapped to Dmel FlyBase orthologs internally via --ortholog_map, so
+# they compare correctly against the Dmel-indexed atlas.
 #
-# NOT wired into `rule all` / rule integrate's inputs yet -- run it once,
-# inspect the atlas_label_cols candidates it prints (or set
-# atlas_label_cols in config.yaml once you know the atlas obs column
-# names), then repoint rule integrate/integrate_uninfected's `files` input
-# at results/filtered_h5ad_annotated/ instead of results/filtered_h5ad/
-# once you're happy with the transferred labels.
+# First run with atlas_label_cols left empty in config.yaml to print the
+# atlas's candidate obs columns and stop; fill in atlas_label_cols with the
+# real column name(s) (e.g. ["cell_type"]) once you know them, then rerun.
+# rule integrate (via rule map_celllines_to_embryo) automatically picks up
+# whatever atlas_<label> columns this rule writes -- no further wiring
+# needed once atlas_label_cols is set.
 rule annotate_with_atlas:
     input:
-        files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
         atlas              = config.get("flysta3d_atlas", "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"),
         flybase_annotation = config["flybase_annotation"],
+        orthologs          = config["ortholog_map"],
     output:
-        annotated = expand("results/filtered_h5ad_annotated/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        annotated = expand("results/embryo_annotated/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
     params:
         script       = config.get("annotate_atlas_script",
                            "snakemake_scripts/method_comparison/annotate_with_flysta3d.py"),
-        out_dir      = "results/filtered_h5ad_annotated",
+        out_dir      = "results/embryo_annotated",
         k            = config.get("atlas_k", 30),
         n_pcs        = config.get("atlas_n_pcs", 30),
         harmony_vars = config.get("atlas_harmony_vars", ["dataset", "method"]),
@@ -885,7 +903,7 @@ rule annotate_with_atlas:
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting Flysta3D-v2 atlas label transfer"
+        echo "Starting Flysta3D-v2 atlas label transfer (embryo samples only)"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
@@ -895,6 +913,7 @@ rule annotate_with_atlas:
             --query {input.files} \
             --out_dir {params.out_dir} \
             --flybase_annotation {input.flybase_annotation} \
+            --ortholog_map {input.orthologs} \
             --k {params.k} \
             --n_pcs {params.n_pcs} \
             --harmony_vars {params.harmony_vars} \
@@ -904,59 +923,80 @@ rule annotate_with_atlas:
         echo "Atlas label transfer complete"
         """
 
-rule integrate_uninfected:
+##################################################################
+# Map primary cell line samples onto the annotated embryo cells
+##################################################################
+# Runs AFTER annotate_with_atlas, BEFORE integrate: transfers the
+# atlas-derived cell-type label(s) from the now-annotated embryo cells onto
+# every remaining (non-embryo) sample -- the cultured primary cell lines --
+# via the same Harmony+KNN recipe (see docstring in
+# snakemake_scripts/analysis/map_cellline_to_embryo.py for why this maps
+# through your own embryo cells rather than the atlas directly). D.
+# simulans cell line samples are remapped to Dmel FlyBase orthologs
+# internally via --ortholog_map, same as the embryo arm above.
+rule map_celllines_to_embryo:
     input:
-        files      = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=[s for s in SAMPLE_IDS if "wMel" not in s and "wRi" not in s]),
-        orthologs  = config["ortholog_map"],
+        reference = expand("results/embryo_annotated/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
+        query     = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=CELLLINE_SAMPLE_IDS),
+        orthologs = config["ortholog_map"],
     output:
-        integrated = "results/integrated/integrated_uninfected.h5ad",
+        mapped = expand("results/celllines_mapped_to_embryo/{sample_id}.h5ad", sample_id=CELLLINE_SAMPLE_IDS),
     params:
-        files        = "results/filtered_h5ad/*DOX-Ctrl*.h5ad",
-        script       = config["integrate_script"],
-        sample       = "JW18DOX-Ctrl",
-        fig_dir      = "results/integrated/figures_uninfected",
-        out_path     = "results/integrated/integrated_uninfected.h5ad",
-        resolution   = '0.3',
+        script       = config.get("map_cellline_script",
+                           "snakemake_scripts/analysis/map_cellline_to_embryo.py"),
+        out_dir      = "results/celllines_mapped_to_embryo",
+        k            = config.get("cellline_embryo_k", 30),
+        n_pcs        = config.get("cellline_embryo_n_pcs", 30),
+        harmony_vars = config.get("cellline_embryo_harmony_vars", ["dataset", "method"]),
+        label_cols_flag = (
+            "--label_cols " + " ".join(config["atlas_label_cols"])
+            if config.get("atlas_label_cols") else ""
+        ),
     log:
-        "logs/integrate/integrate_uninfected.log"
+        "logs/map_celllines_to_embryo/map_celllines_to_embryo.log"
     threads:
-        config.get("integrate_threads", 16)
+        config.get("cellline_embryo_threads", 16)
     resources:
-        slurm_partition = config.get("integrate_partition", "medium"),
-        mem_mb          = config.get("integrate_mem", 128000),
-        slurm_time      = config.get("integrate_time", "8:00:00")
+        slurm_partition = config.get("cellline_embryo_partition", "medium"),
+        mem_mb          = config.get("cellline_embryo_mem", 250000),
+        slurm_time      = config.get("cellline_embryo_time", "8:00:00")
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting integration of uninfected samples"
+        echo "Mapping primary cell line samples onto the annotated embryo reference"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --files {params.files} \
-            --sample {params.sample} \
-            --batch_key batch \
-            --min_cells 3 \
-            --min_genes 200 \
-            --n_pcs 30 \
-            --resolution {params.resolution} \
-            --out_path {params.out_path} \
-            --fig_dir {params.fig_dir} \
+            --reference {input.reference} \
+            --query {input.query} \
+            --out_dir {params.out_dir} \
             --ortholog_map {input.orthologs} \
-            --resolution {params.resolution}
+            --k {params.k} \
+            --n_pcs {params.n_pcs} \
+            --harmony_vars {params.harmony_vars} \
+            {params.label_cols_flag}
 
-        echo "Integration of uninfected samples complete"
+        echo "Cell line -> embryo mapping complete"
         """
 
 rule integrate:
+    # Every sample in samples.csv reaches this rule -- embryo samples via
+    # rule annotate_with_atlas's output (atlas_<label> cell-type columns),
+    # cell line samples via rule map_celllines_to_embryo's output
+    # (embryo_<label> cell-type columns transferred from the annotated
+    # embryo cells). --ortholog_map is passed again here as a safety net
+    # (integrate_v2.py only remaps a file if its var_names still look
+    # Dsim-like; both upstream files are already Dmel-indexed, so this is a
+    # no-op in the normal case) rather than as the primary remap step.
     input:
-        files     = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
-        orthologs = config["ortholog_map"],
+        embryo_files   = expand("results/embryo_annotated/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
+        cellline_files = expand("results/celllines_mapped_to_embryo/{sample_id}.h5ad", sample_id=CELLLINE_SAMPLE_IDS),
+        orthologs      = config["ortholog_map"],
     output:
         integrated = "results/integrated/integrated.h5ad"
     params:
-        files         = "results/filtered_h5ad/*.h5ad",
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
         fig_dir       = "results/integrated/figures",
@@ -980,7 +1020,7 @@ rule integrate:
         conda activate {SCANPY_ENV}
 
         python {params.script} \
-            --files {input.files} \
+            --files {input.embryo_files} {input.cellline_files} \
             --sample {params.sample} \
             --batch_key batch \
             --min_cells 3 \
@@ -992,76 +1032,6 @@ rule integrate:
             --ortholog_map {input.orthologs}
 
         echo "Integration complete"
-        """
-
-rule cell_cycle_analysis_uninfected:
-    input:
-        h5ad = "results/integrated/integrated_uninfected.h5ad",
-    output:
-        annotated_h5ad = "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-    params:
-        script = config["cell_cycle_script"]
-    log:
-        "logs/cellcycle/cyclum_uninfected.log"
-    threads:
-        config["cell_cycle_threads"]
-    resources:
-        slurm_partition = config["cell_cycle_partition"],
-        mem_mb = config["cell_cycle_mem"],
-        slurm_time = config["cell_cycle_time"]
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting cell cycle annotation for Uninfected samples"
-        echo "Input file: {input.h5ad}"
-        
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {CYCLUM_ENV}
-
-        python {params.script} \
-            --input {input.h5ad} \
-            --output {output.annotated_h5ad}
-        
-        """
-
-rule cyclum_analysis_uninfected:
-    input:
-        h5ad = "results/integrated/integrated_uninfected_with_cellcycle.h5ad",
-    output:
-        annotated    = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated"),
-        result       = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cyclum_annotated.h5ad",
-        # umap_dir     = directory("results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_umap_per_gene"),
-        # cc_stats     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_cc_cluster_stats.csv",
-        # de_genes     = "results/integrated/integrated_uninfected_with_cellcycle_annotated/JW18_uninfected_validation_de_genes.csv",
-    params:
-        script       = config["cyclum_analysis_script"],
-        n_top_genes  = config.get("cyclum_n_top_genes", 5),
-        n_umap_genes = config.get("cyclum_n_umap_genes", 6),
-    log:
-        "logs/cellcycle/cyclum_uninfected.log"
-    threads:
-        config["cell_cycle_threads"]
-    resources:
-        slurm_partition = config["cell_cycle_partition"],
-        mem_mb          = config["cell_cycle_mem"],
-        slurm_time      = config["cell_cycle_time"]
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting cell cycle annotation for Uninfected samples"
-        echo "Input file: {input.h5ad}"
-
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
-        conda activate {CYCLUM_ENV}
-
-        python {params.script} \
-            --input {input.h5ad} \
-            --output {output.annotated} \
-            --sample JW18_uninfected \
-            --save-h5ad \
-            --skip-cyclum \
-            --n-top-genes {params.n_top_genes} \
-            --n-umap-genes {params.n_umap_genes}
         """
 
 rule cell_cycle_analysis:
@@ -1098,36 +1068,6 @@ rule cell_cycle_analysis:
             --save-output
 
         echo "Cell cycle analysis complete"
-        """
-
-rule project_to_cell_cycle:
-    input:
-        query_h5ad = "results/integrated/integrated_with_cellcycle.h5ad",
-        ref_h5ad   = "results/integrated/integrated_uninfected_with_cellcycle.h5ad"
-    output:
-        projected_h5ad = "results/integrated/integrated_by_cellcycle.h5ad",
-        flag           = touch("results/cellcycle_projection/.done")
-    params:
-        script = config["project_cell_cycle_script"]
-    log:
-       "logs/cellcycle/projection.log"
-    threads:
-        config.get("cellcycle_projection_threads", 4)
-    resources:
-        slurm_partition = config.get("cellcycle_projection_partition", "medium"),
-        mem_mb          = config.get("cellcycle_projection_mem", 32000),
-        slurm_time      = config.get("cellcycle_projection_time", "2:00:00")
-    shell:
-        """
-        exec > {log} 2>&1
-        echo "Starting cell cycle projection"   
-
-        mamba activate scanpy 
-
-        python {params.script} \
-            --query {input.query_h5ad} \
-            --ref {input.ref_h5ad} \
-            --out_path {output.projected_h5ad}
         """
 
 rule cluster_marker_pathway:

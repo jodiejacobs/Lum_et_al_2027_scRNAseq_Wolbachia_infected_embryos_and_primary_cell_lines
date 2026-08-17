@@ -124,7 +124,6 @@ cyclum_analysis_script: "snakemake_scripts/analysis/cyclum_cellcycle_analysis.py
 # kallisto mapping (map_pipseq/map_10x) instead pulls index.idx/t2g.txt from
 # each sample's own genome directory above.
 transcripts_to_genes: "/private/groups/russelllab/jodie/scRNAseq/reference/Drosophila_melanogaster_wMel_combined_16S/t2g.txt"
-project_cell_cycle_script: "snakemake_scripts/method_comparison/integrate_by_ref.py"
 
 # Compute resources for cellranger 
 cellranger_threads: 16
@@ -207,6 +206,19 @@ annotate_atlas_threads: 16
 annotate_atlas_partition: "medium"
 annotate_atlas_mem: 500000   # atlas is large (~12GB h5ad) -- start big, tune down once you've profiled it
 annotate_atlas_time: "12:00:00"
+
+# Map primary cell line samples onto the atlas-annotated embryo cells
+# (rule map_celllines_to_embryo / snakemake_scripts/analysis/map_cellline_to_embryo.py).
+# Reuses atlas_label_cols above (the same atlas_<label> columns
+# annotate_with_atlas wrote) -- no separate label list needed.
+map_cellline_script: "snakemake_scripts/analysis/map_cellline_to_embryo.py"
+cellline_embryo_k: 30
+cellline_embryo_n_pcs: 30
+cellline_embryo_harmony_vars: ["dataset", "method"]
+cellline_embryo_threads: 16
+cellline_embryo_partition: "medium"
+cellline_embryo_mem: 250000
+cellline_embryo_time: "8:00:00"
 
 # qc_script: "scripts/method_comparison/qc_plots.py"
 # qc_threads: 4

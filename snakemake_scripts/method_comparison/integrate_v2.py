@@ -1,36 +1,57 @@
 """
 integrate.py
 ============
-Joint clustering pipeline for studying Wolbachia infection dynamics.
+Joint clustering pipeline for the Lum et al. 2027 Wolbachia-infected embryo
++ primary cell line scRNA-seq project.
+
+Where each sample's cells come from
+------------------------------------
+The Snakefile feeds this script every sample in samples.csv, but by the time
+they reach here (rule integrate) each has already been through one of two
+upstream label-transfer arms so every cell -- embryo or cell line -- carries
+a comparable cell-type call:
+  - Embryo samples  -> rule annotate_with_atlas (annotate_with_flysta3d.py):
+    cell types transferred directly from the Flysta3D-v2 whole-embryo atlas
+    (resources/wcoembed_whole_embeding_downsampled_modified.h5ad) via
+    Harmony + KNN, written as atlas_<label>[_confidence] obs columns.
+  - Cell line samples (everything else) -> rule map_celllines_to_embryo
+    (map_cellline_to_embryo.py): cell types transferred from the
+    now-annotated embryo cells (not the atlas directly -- cultured cells
+    aren't embryonic cells) via the same Harmony + KNN recipe, written as
+    embryo_<label>[_confidence] obs columns.
+D. simulans samples (Dsim-Merrill23, Dsim6B, Dsim6B-wMel, and their embryo
+counterparts) are quantified against the Dsim genome, so their var_names are
+Dsim NCBI/Gnomon IDs in a different namespace from the D. melanogaster
+FlyBase IDs everything else uses -- both upstream label-transfer scripts,
+and this script itself (see remap_dsim_to_dmel below), rename those
+var_names onto the orthologous Dmel FlyBase ID (--ortholog_map, a
+reciprocal-best-hit table) so every sample lines up gene-for-gene.
 
 Strategy
 --------
-1. Load all samples, extract metadata from filenames.
+1. Load all samples, extract metadata from filenames, remap any remaining
+   Dsim samples' var_names to Dmel orthologs, and coalesce the
+   atlas_<label>/embryo_<label> columns above into one cell_type_<label>
+   field per cell.
 2. Preprocess: filter, HVG, PCA.
-3. Correct for library-prep method ONLY (BBKNN) — biological signal preserved.
-4. Cluster ALL cells together (DOX-Ctrl, wMel-Ctrl, D7, D28, D56).
-5. Ask which clusters are enriched at which timepoints/conditions.
+3. Correct for library-prep method + replicate ONLY (Harmony) — biological
+   signal (condition, embryo vs. cell line, Wolbachia titer, cell type) is
+   preserved, not corrected away.
+4. Cluster ALL cells together.
+5. Ask which clusters are enriched at which conditions.
 6. Ask how Wolbachia titer varies across clusters.
-7. Export SCEPTIC-ready files using cluster + condition labels.
-
-This approach is preferred when:
-  - You don't expect entirely new cell states to appear upon infection
-  - You want to know which existing cell states are most affected by infection
-  - You want titer as a continuous variable overlaid on the cluster landscape
-
-Biological interpretation:
-  - JW18DOX-Ctrl  = uninfected baseline
-  - D7/D28/D56    = infection intermediates
-  - JW18wMel-Ctrl = stably infected endpoint
-  - Clusters enriched in wMel / high titer = infection-responsive cell states
+7. Export SCEPTIC-ready files (only meaningful if re-run on the older JW18
+   DOX->wMel infection time-course dataset; see export_sceptic docstring).
 
 Usage
 -----
 python integrate.py \\
-    --files results/filtered_h5ad/*.h5ad \\
+    --files results/embryo_annotated/*.h5ad \\
+            results/celllines_mapped_to_embryo/*.h5ad \\
     --sample wolbachia_infection \\
     --out_path results/integrated/integrated.h5ad \\
     --fig_dir results/integrated/figures \\
+    --ortholog_map reference/orthologs/dmel_dsim_orthologs_rbh.tsv \\
     --optimize_resolution \\
     --resolutions 0.1 0.2 0.3 0.4 0.5 0.6 0.8 1.0 1.2 1.5
 """
@@ -150,41 +171,42 @@ def remap_dsim_to_dmel(adata, dsim_to_dmel, label=""):
 # ─────────────────────────────────────────────────────────────────────────────
 # Metadata extraction
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _extract_timepoint_numeric(row):
-    """
-    Numeric position on the infection pseudotime axis:
-        JW18DOX-Ctrl  -> 0    (uninfected baseline)
-        D7/D28/D56    -> 7, 28, 56  (infection intermediates)
-        JW18wMel-Ctrl -> 99  (stable infected endpoint)
-    """
-    tp = row.get("timepoint", None)
-    if tp is not None and pd.notna(tp) and str(tp) not in ("nan", "None", ""):
-        m = re.search(r"(\d+)", str(tp))
-        return int(m.group(1)) if m else 0
-    elif str(row.get("cell_line", "")) == "JW18wMel":
-        return 99
-    else:
-        return 0
-
+# batch_key values are the per-sample h5ad basename set below in integrate(),
+# i.e. samples.csv's "{condition}-{replicate}_{seq_platform}" sample_id (see
+# Snakefile). "condition" is deliberately free-form -- it can be a cultured
+# cell line name (JW18wMel, ubkhc, Dsim6B, Dsim6B-wMel, Dsim-Merrill23, ...)
+# or an embryo condition (ubkhc-wMel-embryos, Dsim-Merrill23-wRi-embryos,
+# ...) -- so parsing below is driven purely by the fixed
+# "-<replicate>_<10x|pipseq>" suffix Snakefile always appends, rather than
+# any hardcoded vocabulary of cell-line/timepoint names from an older
+# JW18-only DOX->wMel infection time-course experiment that doesn't apply to
+# this project's embryo + primary-cell-line design.
 
 def add_metadata(adata, batch_key):
     """Extract sample metadata from batch/filename strings."""
-    adata.obs["cell_line"]  = adata.obs[batch_key].str.extract(r"(JW18DOX|JW18wMel)")[0]
-    adata.obs["treatment"]  = adata.obs[batch_key].str.extract(r"-(Ctrl|SV)")[0]
-    adata.obs["timepoint"]  = adata.obs[batch_key].str.extract(r"-(D\d+)-")[0]
-    adata.obs["replicate"]  = adata.obs[batch_key].str.extract(r"-(\d+)_")[0]
-    adata.obs["method"]     = adata.obs[batch_key].str.extract(r"_(10x|pipseq)$")[0]
-    adata.obs["bio_condition"] = adata.obs.apply(
-        lambda row: (
-            f"{row['cell_line']}-{row['treatment']}-{row['timepoint']}"
-            if pd.notna(row["timepoint"])
-            else f"{row['cell_line']}-{row['treatment']}"
-        ),
-        axis=1,
+    parsed = adata.obs[batch_key].str.extract(
+        r"^(?P<condition>.+)-(?P<replicate>\d+)_(?P<method>10x|pipseq)$"
     )
-    adata.obs["timepoint_numeric"] = adata.obs.apply(
-        _extract_timepoint_numeric, axis=1).astype(int)
+    unparsed = parsed["condition"].isna()
+    if unparsed.any():
+        bad = sorted(adata.obs.loc[unparsed, batch_key].unique())
+        print(f"  WARNING: {int(unparsed.sum())} cells have a {batch_key!r} "
+              "value that doesn't match '<condition>-<replicate>_<10x|pipseq>': "
+              f"{bad}. condition/replicate/method left as 'unknown' for these.")
+
+    adata.obs["condition"] = parsed["condition"].fillna(adata.obs[batch_key]).astype(str)
+    adata.obs["replicate"] = parsed["replicate"].fillna("unknown").astype(str)
+    adata.obs["method"]    = parsed["method"].fillna("unknown").astype(str)
+    adata.obs["is_embryo"] = adata.obs["condition"].str.contains("embryo", case=False)
+
+    # Kept for backwards compatibility with the plotting/analysis code below
+    # (and with integrate_by_ref.py, which also expects a "cell_line" and
+    # "bio_condition" column) -- both are just aliases of "condition" here,
+    # a per-sample biological condition label rather than a cell-line
+    # ontology; an embryo sample's "cell_line" value is its embryo condition
+    # name (e.g. "ubkhc-wMel-embryos"), not the parental cell line.
+    adata.obs["cell_line"]     = adata.obs["condition"]
+    adata.obs["bio_condition"] = adata.obs["condition"]
     return adata
 
 
@@ -495,12 +517,12 @@ def cluster_all(
     sc.tl.umap(adata)
 
     # Post-correction QC
-    sc.pl.umap(adata, color=["method", "bio_condition", "cell_line", "timepoint_numeric"],
+    sc.pl.umap(adata, color=["method", "bio_condition", "cell_line", "is_embryo"],
                save=f"_{sample}_after_correction.pdf", ncols=2,
                title=["Method (should overlap post-correction)",
                       "Bio condition (should still separate)",
-                      "Cell line",
-                      "Timepoint (numeric)"])
+                      "Cell line / condition",
+                      "Embryo vs. cell line"])
 
     # Resolution optimisation
     if optimize_resolution:
@@ -700,7 +722,7 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     colors = _leiden_colors(adata, key="leiden")
     clusters = sorted(adata.obs["leiden"].unique())
     obs = adata.obs[["leiden", "wolbachia_titer", "bio_condition",
-                     "method", "timepoint_numeric"]].copy()
+                     "method", "is_embryo"]].copy()
     obs_titer = obs.dropna(subset=["wolbachia_titer"])
 
     # ── Kruskal-Wallis ────────────────────────────────────────────────────────
@@ -783,20 +805,20 @@ def analyze_titer_by_cluster(adata, fig_dir, sample):
     plt.tight_layout()
     _savefig(fig, os.path.join(fig_dir, f"titer_heatmap_cluster_condition_{sample}.pdf"))
 
-    # ── Plot 5: titer by cluster × timepoint (infected cells only) ────────────
+    # ── Plot 5: titer by cluster × embryo/cell-line (infected cells only) ─────
     infected = obs_titer[obs_titer["wolbachia_titer"] > 0]
     if len(infected) > 0:
         fig, ax = plt.subplots(figsize=(12, 5))
         sns.boxplot(data=infected, x="leiden", y="wolbachia_titer",
-                    hue="timepoint_numeric", ax=ax,
+                    hue="is_embryo", ax=ax,
                     flierprops=dict(markersize=1), order=clusters)
         ax.set_xlabel("Leiden Cluster")
         ax.set_ylabel("Wolbachia Titer (infected cells only)")
-        ax.set_title(f"Titer by cluster and timepoint — {sample}")
-        ax.legend(title="Timepoint", bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax.set_title(f"Titer by cluster, embryo vs. cell line — {sample}")
+        ax.legend(title="Is embryo", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.tight_layout()
         _savefig(fig, os.path.join(fig_dir,
-                                   f"titer_by_cluster_timepoint_{sample}.pdf"))
+                                   f"titer_by_cluster_embryo_{sample}.pdf"))
 
     return stats
 
@@ -809,8 +831,13 @@ def export_sceptic(adata, fig_dir, sample, n_pcs=30):
     """
     Export SCEPTIC inputs from the jointly-clustered object.
 
-    Uses wMel cells only (DOX→D7→D28→D56→wMel-Ctrl axis).
-    DOX cells provide the t=0 anchor as the uninfected reference state.
+    SCEPTIC pseudotime export was designed around the JW18 DOX->wMel
+    infection time-course (JW18DOX-Ctrl t=0 -> D7/D28/D56 -> JW18wMel-Ctrl
+    t=99). This project's samples (embryos + primary cell lines; see
+    samples.csv) have no such time-course axis, so this export is skipped
+    unless those legacy JW18DOX/JW18wMel timepoint conditions are actually
+    present in "cell_line" -- i.e. it stays usable if re-run on the older
+    JW18 dataset, but is a clean no-op (not a crash) on this one.
     """
     print("\n" + "=" * 60)
     print("EXPORTING SCEPTIC INPUTS")
@@ -818,18 +845,35 @@ def export_sceptic(adata, fig_dir, sample, n_pcs=30):
 
     os.makedirs(fig_dir, exist_ok=True)
 
-    # Build the full pseudotime axis:
-    # DOX-Ctrl (t=0) + wMel intermediates (D7/D28/D56) + wMel-Ctrl (t=999)
-    sceptic_mask = (
-        (adata.obs["cell_line"] == "JW18DOX") & (adata.obs["treatment"] == "Ctrl")
-    ) | (
-        adata.obs["cell_line"] == "JW18wMel"
-    )
+    legacy_timepoints = adata.obs["cell_line"].astype(str).str.contains(
+        r"^JW18(DOX|wMel)$", regex=True)
+    if not legacy_timepoints.any():
+        present = sorted(adata.obs["cell_line"].astype(str).unique())
+        print("  Skipping SCEPTIC export: no JW18DOX/JW18wMel infection "
+              f"time-course conditions found in 'cell_line' (present: "
+              f"{present}). SCEPTIC's DOX->wMel pseudotime axis doesn't "
+              "apply to this embryo/cell-line sample set.")
+        return
+
+    timepoint = adata.obs["condition"].astype(str).str.extract(r"-(D\d+)-")[0]
+    is_wmel_ctrl = adata.obs["cell_line"].astype(str) == "JW18wMel"
+    is_dox_ctrl  = (adata.obs["cell_line"].astype(str) == "JW18DOX") & timepoint.isna()
+    timepoint_numeric = pd.Series(0, index=adata.obs_names, dtype=int)
+    timepoint_numeric.loc[timepoint.notna()] = timepoint.dropna().str.extract(
+        r"(\d+)")[0].astype(int).values
+    timepoint_numeric.loc[is_wmel_ctrl] = 99
+
+    sceptic_mask = (is_dox_ctrl | is_wmel_ctrl | timepoint.notna()).values
     adata_s = adata[sceptic_mask].copy()
+    adata_s.obs["timepoint_numeric"] = timepoint_numeric[sceptic_mask].values
 
     print(f"SCEPTIC cells: {adata_s.n_obs}")
     print("Timepoint breakdown:")
     print(adata_s.obs["timepoint_numeric"].value_counts().sort_index().to_string())
+
+    if adata_s.n_obs == 0:
+        print("  No cells matched the SCEPTIC timepoint axis -- nothing to export.")
+        return
 
     # Feature matrix: PCA coords
     n_actual = min(n_pcs, adata_s.obsm["X_pca"].shape[1])
@@ -934,6 +978,41 @@ def integrate(
     adata.X = scipy.sparse.csr_matrix(adata.X)
     
     adata = add_metadata(adata, batch_key)
+
+    # ── Unify embryo-atlas-derived cell type labels ──────────────────────────
+    # Embryo samples carry atlas_<label>[_confidence] obs columns from rule
+    # annotate_with_atlas (annotate_with_flysta3d.py: KNN transfer straight
+    # from the Flysta3D-v2 atlas). Cell line samples carry the same label(s)
+    # as embryo_<label>[_confidence] from rule map_celllines_to_embryo (KNN
+    # transfer from the annotated embryo cells). Coalesce each matching pair
+    # into one cell_type_<label>[_confidence] column so every cell in the
+    # integrated object -- embryo or cell line -- has a single label field to
+    # facet/color by, regardless of which arm of the pipeline it came through.
+    atlas_cols = sorted({
+        c[len("atlas_"):] for c in adata.obs.columns
+        if c.startswith("atlas_") and not c.endswith("_confidence")
+    })
+    for col in atlas_cols:
+        a_col, e_col = f"atlas_{col}", f"embryo_{col}"
+        a_conf, e_conf = f"{a_col}_confidence", f"{e_col}_confidence"
+        out_col, out_conf = f"cell_type_{col}", f"cell_type_{col}_confidence"
+
+        if e_col in adata.obs.columns:
+            adata.obs[out_col] = adata.obs[a_col].where(
+                adata.obs[a_col].notna(), adata.obs[e_col])
+        else:
+            adata.obs[out_col] = adata.obs[a_col]
+
+        conf_parts = [c for c in (a_conf, e_conf) if c in adata.obs.columns]
+        if conf_parts:
+            conf = adata.obs[conf_parts[0]]
+            for c in conf_parts[1:]:
+                conf = conf.where(conf.notna(), adata.obs[c])
+            adata.obs[out_conf] = conf
+
+        n_labelled = adata.obs[out_col].notna().sum()
+        print(f"  Unified '{out_col}': {n_labelled}/{adata.n_obs} cells labelled "
+              f"(from {a_col}" + (f" + {e_col}" if e_col in adata.obs.columns else "") + ")")
 
     print(f"\nLoaded {adata.n_obs:,} cells from {len(files)} files")
     print("Condition breakdown:")
