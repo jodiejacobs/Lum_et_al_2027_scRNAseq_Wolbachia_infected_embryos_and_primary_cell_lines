@@ -928,6 +928,74 @@ rule annotate_with_atlas:
         """
 
 ##################################################################
+# Atlas label transfer via frozen-reference projection (parallel path)
+##################################################################
+# Same job as rule annotate_with_atlas above, but via
+# annotate_with_flysta3d_ingest.py's scanpy.tl.ingest projection instead of
+# joint Harmony re-integration -- see that script's docstring for why this
+# exists (clusters splitting by dataset instead of cell type under the
+# Harmony arm). Writes to its OWN output directory
+# (results/embryo_annotated_ingest/) rather than overwriting
+# results/embryo_annotated/, so both label-transfer methods' outputs exist
+# side by side for comparison (see sanity_check_markers.py) -- this rule
+# does not replace rule annotate_with_atlas or anything downstream of it.
+# Not part of `rule all`'s default targets; request it explicitly, e.g.
+#   snakemake --executor slurm -j 16 results/embryo_annotated_ingest/<sample_id>.h5ad
+rule annotate_with_atlas_ingest:
+    input:
+        files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
+        atlas              = config.get("flysta3d_atlas", "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"),
+        flybase_annotation = config["flybase_annotation"],
+        orthologs          = config["ortholog_map"],
+    output:
+        annotated = expand("results/embryo_annotated_ingest/{sample_id}.h5ad", sample_id=EMBRYO_SAMPLE_IDS),
+    params:
+        script       = config.get("annotate_atlas_ingest_script",
+                           "snakemake_scripts/method_comparison/annotate_with_flysta3d_ingest.py"),
+        out_dir      = "results/embryo_annotated_ingest",
+        fig_dir      = "results/embryo_annotated_ingest/figures",
+        k            = config.get("atlas_k", 30),
+        n_pcs        = config.get("atlas_n_pcs", 30),
+        label_cols_flag = (
+            "--label_cols " + " ".join(config["atlas_label_cols"])
+            if config.get("atlas_label_cols") else ""
+        ),
+        subsample_flag = (
+            f"--subsample_ref {config['atlas_subsample_ref']}"
+            if config.get("atlas_subsample_ref") else ""
+        ),
+    log:
+        "logs/annotate_with_atlas_ingest/annotate_with_atlas_ingest.log"
+    threads:
+        config.get("annotate_atlas_threads", 16)
+    resources:
+        slurm_partition = config.get("annotate_atlas_partition", "medium"),
+        mem_mb          = config.get("annotate_atlas_mem", 500000),
+        slurm_time      = config.get("annotate_atlas_time", "12:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting Flysta3D-v2 atlas projection (ingest, embryo samples only)"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --atlas {input.atlas} \
+            --query {input.files} \
+            --out_dir {params.out_dir} \
+            --fig_dir {params.fig_dir} \
+            --flybase_annotation {input.flybase_annotation} \
+            --ortholog_map {input.orthologs} \
+            --k {params.k} \
+            --n_pcs {params.n_pcs} \
+            {params.label_cols_flag} \
+            {params.subsample_flag}
+
+        echo "Atlas projection complete"
+        """
+
+##################################################################
 # Map primary cell line samples onto the annotated embryo cells
 ##################################################################
 # Runs AFTER annotate_with_atlas, BEFORE integrate: transfers the
@@ -1042,6 +1110,125 @@ rule integrate:
             --ortholog_map {input.orthologs}
 
         echo "Integration complete"
+        """
+
+##################################################################
+# Integration via frozen-atlas projection (parallel path)
+##################################################################
+# Same job as rule integrate above (produce one combined, analysis-ready
+# object across every sample), but via integrate_via_atlas_projection.py:
+# every cell -- embryo AND primary cell line -- is projected onto the SAME
+# frozen Flysta3D-v2 atlas embedding in one shot, instead of Harmony
+# re-clustering results/embryo_annotated + results/celllines_mapped_to_embryo.
+# See that script's docstring for why cross-sample harmonisation isn't
+# needed for this (no joint fit for a dataset axis to leak into) and what
+# this object is/isn't good for (cell-type identity and composition, not
+# titer-sensitive fine structure -- keep using rule integrate's own
+# Harmony(method,replicate) embedding for that). Takes ALL filtered samples
+# directly, independent of rule annotate_with_atlas / map_celllines_to_embryo
+# / rule integrate -- doesn't touch or depend on any of their outputs.
+# Not part of `rule all`'s default targets; request it explicitly, e.g.
+#   snakemake --executor slurm -j 16 results/integrated/integrated_atlas.h5ad
+rule integrate_atlas:
+    input:
+        files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
+        atlas              = config.get("flysta3d_atlas", "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"),
+        flybase_annotation = config["flybase_annotation"],
+        orthologs          = config["ortholog_map"],
+    output:
+        integrated = "results/integrated/integrated_atlas.h5ad"
+    params:
+        script   = config.get("integrate_atlas_script",
+                       "snakemake_scripts/method_comparison/integrate_via_atlas_projection.py"),
+        fig_dir  = "results/integrated/figures_atlas",
+        k        = config.get("atlas_k", 30),
+        n_pcs    = config.get("atlas_n_pcs", 30),
+        label_cols_flag = (
+            "--label_cols " + " ".join(config["atlas_label_cols"])
+            if config.get("atlas_label_cols") else ""
+        ),
+        subsample_flag = (
+            f"--subsample_ref {config['atlas_subsample_ref']}"
+            if config.get("atlas_subsample_ref") else ""
+        ),
+    log:
+        "logs/integrate_atlas/integrate_atlas.log"
+    threads:
+        config.get("integrate_atlas_threads", 16)
+    resources:
+        slurm_partition = config.get("integrate_atlas_partition", "medium"),
+        mem_mb          = config.get("integrate_atlas_mem", 500000),
+        slurm_time      = config.get("integrate_atlas_time", "12:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting atlas-projected integration (all samples)"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --atlas {input.atlas} \
+            --query {input.files} \
+            --out_path {output.integrated} \
+            --fig_dir {params.fig_dir} \
+            --flybase_annotation {input.flybase_annotation} \
+            --ortholog_map {input.orthologs} \
+            --k {params.k} \
+            --n_pcs {params.n_pcs} \
+            {params.label_cols_flag} \
+            {params.subsample_flag}
+
+        echo "Atlas-projected integration complete"
+        """
+
+##################################################################
+# Wolbachia titer by transferred cell-type annotation (atlas path)
+##################################################################
+# Runs analyze_titer_by_annotation.py on rule integrate_atlas's output --
+# titer/infection-rate stats and plots grouped by atlas_<label> instead of
+# a Leiden cluster (see that script's docstring for why: Leiden on this
+# embedding would cluster the ATLAS's own developmental biology, not your
+# titer axis). --groupby defaults to the first entry of atlas_label_cols
+# (atlas_<that column>); override with titer_groupby in config.yaml if you
+# want a different transferred column (e.g. atlas_tissue).
+rule titer_by_annotation_atlas:
+    input:
+        h5ad = rules.integrate_atlas.output.integrated
+    output:
+        flag = touch("results/integrated/figures_atlas/.titer_by_annotation.done")
+    params:
+        script      = config.get("titer_by_annotation_script",
+                          "snakemake_scripts/method_comparison/analyze_titer_by_annotation.py"),
+        fig_dir     = "results/integrated/figures_atlas",
+        groupby     = config.get("titer_groupby",
+                          f"atlas_{config['atlas_label_cols'][0]}" if config.get("atlas_label_cols") else "atlas_annotation"),
+        condition_col = config.get("titer_condition_col", "condition"),
+        sample      = "wolbachia_infection",
+    log:
+        "logs/integrate_atlas/titer_by_annotation.log"
+    threads:
+        config.get("titer_by_annotation_threads", 4)
+    resources:
+        slurm_partition = config.get("titer_by_annotation_partition", "medium"),
+        mem_mb          = config.get("titer_by_annotation_mem", 32000),
+        slurm_time      = config.get("titer_by_annotation_time", "2:00:00")
+    shell:
+        """
+        exec > {log} 2>&1
+        echo "Starting titer-by-annotation analysis"
+
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+
+        python {params.script} \
+            --adata {input.h5ad} \
+            --groupby {params.groupby} \
+            --condition_col {params.condition_col} \
+            --fig_dir {params.fig_dir} \
+            --sample {params.sample}
+
+        echo "Titer-by-annotation analysis complete"
         """
 
 ##################################################################
