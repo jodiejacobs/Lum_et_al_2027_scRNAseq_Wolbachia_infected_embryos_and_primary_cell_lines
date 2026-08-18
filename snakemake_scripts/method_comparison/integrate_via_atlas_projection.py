@@ -151,19 +151,54 @@ def load_all_query_files(query_paths, dsim_to_dmel=None, dsim_ids=None, dmel_ids
     return query
 
 
+def add_sample_metadata(adata, batch_key="source_file"):
+    """Extract condition/replicate/method (and is_embryo/cell_line/
+    bio_condition aliases) from batch_key -- same parsing convention as
+    integrate_v2.py's add_metadata(), duplicated here rather than imported
+    so this default path doesn't pull in integrate_v2.py's heavier
+    dependencies (bbknn, sklearn, seaborn) just for one regex. Keep this in
+    sync with integrate_v2.py's add_metadata() if that ever changes, so
+    'condition' means the same thing regardless of which integration script
+    produced the object.
+
+    batch_key values are the per-sample h5ad basename (set as
+    obs['source_file'] in load_all_query_files above), i.e. samples.csv's
+    "{condition}-{replicate}_{seq_platform}" sample_id (see Snakefile).
+    """
+    parsed = adata.obs[batch_key].astype(str).str.extract(
+        r"^(?P<condition>.+)-(?P<replicate>\d+)_(?P<method>10x|pipseq)$"
+    )
+    unparsed = parsed["condition"].isna()
+    if unparsed.any():
+        bad = sorted(adata.obs.loc[unparsed, batch_key].unique())
+        print(f"  WARNING: {int(unparsed.sum())} cells have a {batch_key!r} "
+              "value that doesn't match '<condition>-<replicate>_<10x|pipseq>': "
+              f"{bad}. condition/replicate/method left as 'unknown' for these.")
+
+    adata.obs["condition"] = parsed["condition"].fillna(adata.obs[batch_key]).astype(str)
+    adata.obs["replicate"] = parsed["replicate"].fillna("unknown").astype(str)
+    adata.obs["method"]    = parsed["method"].fillna("unknown").astype(str)
+    adata.obs["is_embryo"] = adata.obs["condition"].str.contains("embryo", case=False)
+
+    # Aliases kept for parity with integrate_v2.py's output schema (some
+    # downstream code, e.g. embryo_to_cellline_trajectory.py, reads these).
+    adata.obs["cell_line"]     = adata.obs["condition"]
+    adata.obs["bio_condition"] = adata.obs["condition"]
+    return adata
+
+
 def plot_diagnostics(query, label_cols, fig_dir):
     os.makedirs(fig_dir, exist_ok=True)
     sc.settings.figdir = fig_dir
     query = query.copy()
     query.obsm["X_umap"] = query.obsm["X_umap_atlas"]
 
-    # Embryo vs. cell line, using the same "embryo" substring-in-condition
-    # convention the Snakefile's own EMBRYO_SAMPLE_IDS split already uses,
-    # so this always agrees with how the rest of the pipeline classifies
-    # samples.
-    query.obs["_origin"] = np.where(
-        query.obs["source_file"].str.contains("embryo", case=False), "embryo", "cell_line",
-    )
+    # Embryo vs. cell line -- reuse obs['is_embryo'] (set in
+    # add_sample_metadata, same "embryo" substring convention the
+    # Snakefile's own EMBRYO_SAMPLE_IDS split already uses) rather than
+    # re-deriving it here, so this always agrees with the object's own
+    # is_embryo column.
+    query.obs["_origin"] = np.where(query.obs["is_embryo"], "embryo", "cell_line")
 
     print(f"\n-- Diagnostic plots -- writing to {fig_dir}/ --")
     sc.pl.umap(query, color="_origin", save="_origin.pdf",
@@ -248,6 +283,17 @@ def main():
         query_paths, dsim_to_dmel=dsim_to_dmel, dsim_ids=dsim_ids, dmel_ids=dmel_ids,
     )
 
+    # condition/replicate/method/is_embryo/cell_line/bio_condition -- parsed
+    # from source_file (the per-sample h5ad basename) the same way
+    # integrate_v2.py's add_metadata() parses its batch_key. Done here,
+    # before the .raw snapshot below, so every downstream consumer
+    # (embryo_to_cellline_trajectory.py in particular, which requires
+    # obs['condition']) sees it on both adata.X and adata.raw.
+    print("\n-- Extracting sample metadata (condition/replicate/method) from "
+          "source_file --")
+    query = add_sample_metadata(query, batch_key="source_file")
+    print(query.obs["condition"].value_counts().to_string())
+
     # Full-gene, log1p-normalised copy BEFORE the projection step restricts
     # query down to the atlas's HVG panel -- stashed as .raw afterwards, the
     # same convention integrate_v2.py's own preprocess() uses (adata.raw set
@@ -284,10 +330,10 @@ def main():
 
     # Backward-compat columns for scripts written against integrate_v2.py's
     # output schema (e.g. embryo_to_cellline_trajectory.py):
-    #   - is_embryo: boolean, same "embryo" substring-in-source_file
-    #     convention the Snakefile's own EMBRYO_SAMPLE_IDS split already
-    #     uses, so this always agrees with how the rest of the pipeline
-    #     classifies samples.
+    #   - condition/replicate/method/is_embryo/cell_line/bio_condition were
+    #     already set above (add_sample_metadata, before projection) and
+    #     survive project_query_onto_reference untouched (it copies
+    #     query.obs onto the projected object as-is).
     #   - cell_type_<label>: integrate_v2.py coalesces atlas_<label>
     #     (embryo cells) and embryo_<label> (cell line cells, transferred
     #     via map_cellline_to_embryo.py) into one cell_type_<label> column
@@ -305,9 +351,6 @@ def main():
     # cyclum-based output (results/annotated_h5ad/), a different upstream
     # path than the results/filtered_h5ad/ files this script reads directly;
     # the trajectory script's cell-cycle section also skips gracefully.
-    projected.obs["is_embryo"] = projected.obs["source_file"].astype(str).str.contains(
-        "embryo", case=False,
-    )
     if args.label_cols:
         for col in args.label_cols:
             atlas_col = f"atlas_{col}"
