@@ -1059,7 +1059,13 @@ rule map_celllines_to_embryo:
         echo "Cell line -> embryo mapping complete"
         """
 
-rule integrate:
+rule integrate_harmony:
+    # RETIRED as the default path (superseded by rule integrate below, which
+    # now uses atlas-projection instead of this joint Harmony/BBKNN
+    # re-clustering) -- kept, renamed, and still fully runnable for
+    # side-by-side method comparison. Not part of `rule all`'s default
+    # targets; request results/integrated/integrated_harmony.h5ad explicitly.
+    #
     # Every sample in samples.csv reaches this rule -- embryo samples via
     # rule annotate_with_atlas's output (atlas_<label> cell-type columns),
     # cell line samples via rule map_celllines_to_embryo's output
@@ -1073,16 +1079,16 @@ rule integrate:
         cellline_files = expand("results/celllines_mapped_to_embryo/{sample_id}.h5ad", sample_id=CELLLINE_SAMPLE_IDS),
         orthologs      = config["ortholog_map"],
     output:
-        integrated = "results/integrated/integrated.h5ad"
+        integrated = "results/integrated/integrated_harmony.h5ad"
     params:
         script        = config["integrate_script"],
         sample        = "wolbachia_infection",
-        fig_dir       = "results/integrated/figures",
-        out_path      = "results/integrated/integrated.h5ad",
+        fig_dir       = "results/integrated/figures_harmony",
+        out_path      = "results/integrated/integrated_harmony.h5ad",
         resolution    = 0.2,
         bio_condition = config.get("integrate_bio_condition", "")
     log:
-        "logs/integrate/integrate.log"
+        "logs/integrate_harmony/integrate_harmony.log"
     threads:
         config.get("integrate_threads", 16)
     resources:
@@ -1092,7 +1098,7 @@ rule integrate:
     shell:
         """
         exec > {log} 2>&1
-        echo "Starting integration"
+        echo "Starting Harmony integration (legacy path)"
 
         source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
@@ -1109,38 +1115,47 @@ rule integrate:
             --fig_dir {params.fig_dir} \
             --ortholog_map {input.orthologs}
 
-        echo "Integration complete"
+        echo "Harmony integration complete"
         """
 
 ##################################################################
-# Integration via frozen-atlas projection (parallel path)
+# Integration via frozen-atlas projection (now the default path)
 ##################################################################
-# Same job as rule integrate above (produce one combined, analysis-ready
-# object across every sample), but via integrate_via_atlas_projection.py:
-# every cell -- embryo AND primary cell line -- is projected onto the SAME
-# frozen Flysta3D-v2 atlas embedding in one shot, instead of Harmony
-# re-clustering results/embryo_annotated + results/celllines_mapped_to_embryo.
-# See that script's docstring for why cross-sample harmonisation isn't
-# needed for this (no joint fit for a dataset axis to leak into) and what
-# this object is/isn't good for (cell-type identity and composition, not
-# titer-sensitive fine structure -- keep using rule integrate's own
-# Harmony(method,replicate) embedding for that). Takes ALL filtered samples
-# directly, independent of rule annotate_with_atlas / map_celllines_to_embryo
-# / rule integrate -- doesn't touch or depend on any of their outputs.
-# Not part of `rule all`'s default targets; request it explicitly, e.g.
-#   snakemake --executor slurm -j 16 results/integrated/integrated_atlas.h5ad
-rule integrate_atlas:
+# Produces the canonical results/integrated/integrated.h5ad -- replaces the
+# old Harmony/BBKNN re-clustering (now renamed rule integrate_harmony,
+# above, kept for comparison but no longer in the default DAG) with
+# integrate_via_atlas_projection.py: every cell -- embryo AND primary cell
+# line -- is projected onto the SAME frozen Flysta3D-v2 atlas embedding in
+# one shot, instead of Harmony re-clustering
+# results/embryo_annotated + results/celllines_mapped_to_embryo. See that
+# script's docstring for why cross-sample harmonisation isn't needed for
+# this (no joint fit for a dataset axis to leak into) and what this object
+# is/isn't good for (cell-type identity and composition, not
+# titer-sensitive fine structure -- see analyze_titer_by_annotation.py and
+# rule titer_by_annotation_atlas below for that). Takes ALL filtered
+# samples directly -- no longer depends on rule annotate_with_atlas or
+# rule map_celllines_to_embryo (their outputs are unused by this rule; both
+# rules still exist and still run standalone if requested, but are no
+# longer on the critical path to results/integrated/integrated.h5ad).
+#
+# The output object is schema-compatible with
+# rule embryo_to_cellline_trajectory's expectations (is_embryo,
+# cell_type_<label>, full-gene .raw, obsm['X_umap']) -- see
+# integrate_via_atlas_projection.py's docstring for the two columns it
+# deliberately does NOT provide (leiden, phase) and why those analysis
+# sections skip gracefully rather than error.
+rule integrate:
     input:
         files              = expand("results/filtered_h5ad/{sample_id}.h5ad", sample_id=SAMPLE_IDS),
         atlas              = config.get("flysta3d_atlas", "resources/wcoembed_whole_embeding_downsampled_modified.h5ad"),
         flybase_annotation = config["flybase_annotation"],
         orthologs          = config["ortholog_map"],
     output:
-        integrated = "results/integrated/integrated_atlas.h5ad"
+        integrated = "results/integrated/integrated.h5ad"
     params:
         script   = config.get("integrate_atlas_script",
                        "snakemake_scripts/method_comparison/integrate_via_atlas_projection.py"),
-        fig_dir  = "results/integrated/figures_atlas",
+        fig_dir  = "results/integrated/figures",
         k        = config.get("atlas_k", 30),
         n_pcs    = config.get("atlas_n_pcs", 30),
         label_cols_flag = (
@@ -1152,7 +1167,7 @@ rule integrate_atlas:
             if config.get("atlas_subsample_ref") else ""
         ),
     log:
-        "logs/integrate_atlas/integrate_atlas.log"
+        "logs/integrate/integrate.log"
     threads:
         config.get("integrate_atlas_threads", 16)
     resources:
@@ -1185,16 +1200,16 @@ rule integrate_atlas:
 ##################################################################
 # Wolbachia titer by transferred cell-type annotation (atlas path)
 ##################################################################
-# Runs analyze_titer_by_annotation.py on rule integrate_atlas's output --
-# titer/infection-rate stats and plots grouped by atlas_<label> instead of
-# a Leiden cluster (see that script's docstring for why: Leiden on this
-# embedding would cluster the ATLAS's own developmental biology, not your
-# titer axis). --groupby defaults to the first entry of atlas_label_cols
-# (atlas_<that column>); override with titer_groupby in config.yaml if you
-# want a different transferred column (e.g. atlas_tissue).
+# Runs analyze_titer_by_annotation.py on rule integrate's output (atlas-
+# projected integration) -- titer/infection-rate stats and plots grouped by
+# atlas_<label> instead of a Leiden cluster (see that script's docstring for
+# why: Leiden on this embedding would cluster the ATLAS's own developmental
+# biology, not your titer axis). --groupby defaults to the first entry of
+# atlas_label_cols (atlas_<that column>); override with titer_groupby in
+# config.yaml if you want a different transferred column (e.g. atlas_tissue).
 rule titer_by_annotation_atlas:
     input:
-        h5ad = rules.integrate_atlas.output.integrated
+        h5ad = rules.integrate.output.integrated
     output:
         flag = touch("results/integrated/figures_atlas/.titer_by_annotation.done")
     params:
@@ -1206,7 +1221,7 @@ rule titer_by_annotation_atlas:
         condition_col = config.get("titer_condition_col", "condition"),
         sample      = "wolbachia_infection",
     log:
-        "logs/integrate_atlas/titer_by_annotation.log"
+        "logs/integrate/titer_by_annotation.log"
     threads:
         config.get("titer_by_annotation_threads", 4)
     resources:

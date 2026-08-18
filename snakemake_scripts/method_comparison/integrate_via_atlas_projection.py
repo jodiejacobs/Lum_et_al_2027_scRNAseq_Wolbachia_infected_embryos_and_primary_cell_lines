@@ -37,17 +37,36 @@ embryos they came from." Keep using integrate_v2.py's own Harmony
 expression change with titer within a cell type" -- that embedding is
 actually fit to be sensitive to your data's real structure. Two different
 questions, two different embeddings; don't ask one to do both jobs.
-integrate_v2.py's own analyze_condition_enrichment / analyze_titer_by_cluster
-functions can be pointed at THIS object too -- see the note at the bottom
-of this file.
+Use analyze_titer_by_annotation.py --groupby atlas_annotation instead of
+integrate_v2.py's own leiden-keyed analyze_titer_by_cluster on this object.
+
+Schema compatibility with embryo_to_cellline_trajectory.py
+--------------------------------------------------------------
+This is meant to be a drop-in replacement for integrate_v2.py's output as
+far as that script is concerned, so it also writes: is_embryo (bool, same
+"embryo"-in-source_file convention the Snakefile's EMBRYO_SAMPLE_IDS split
+already uses), cell_type_<label> (a copy of atlas_<label> -- integrate_v2.py
+coalesces atlas_<label>/embryo_<label> into this name via its two-step
+relay; every cell here already has atlas_<label> directly, so it's just
+copied), a full-gene log1p-normalised .raw (needed for pseudobulk
+correlation / marker-module scoring -- adata.X itself is restricted to the
+atlas's HVG panel), and obsm['X_umap'] in addition to the explicitly named
+obsm['X_umap_atlas']. Two columns integrate_v2.py's output has that this
+one deliberately does NOT: 'leiden' (there's no clustering step here --
+embryo_to_cellline_trajectory.py's Leiden-cluster-composition section skips
+gracefully when it's absent, rather than being given a mislabeled copy of
+atlas_<label>) and 'phase' (cell-cycle stage -- comes from rule
+annotate_cell_cycle's cyclum-based results/annotated_h5ad/ output, a
+different upstream path than the results/filtered_h5ad/ files this script
+reads directly; that section skips gracefully too).
 
 Run with:
     mamba activate scanpy
     python snakemake_scripts/method_comparison/integrate_via_atlas_projection.py \\
         --atlas resources/wcoembed_whole_embeding_downsampled_modified.h5ad \\
         --query results/filtered_h5ad/*.h5ad \\
-        --out_path results/integrated/integrated_atlas.h5ad \\
-        --fig_dir results/integrated/figures_atlas \\
+        --out_path results/integrated/integrated.h5ad \\
+        --fig_dir results/integrated/figures \\
         --label_cols annotation tissue germ_layer \\
         --flybase_annotation reference/fbgn_annotation_ID_fb_2025_04.tsv.gz \\
         --ortholog_map reference/orthologs/dmel_dsim_orthologs_rbh.tsv
@@ -229,18 +248,71 @@ def main():
         query_paths, dsim_to_dmel=dsim_to_dmel, dsim_ids=dsim_ids, dmel_ids=dmel_ids,
     )
 
+    # Full-gene, log1p-normalised copy BEFORE the projection step restricts
+    # query down to the atlas's HVG panel -- stashed as .raw afterwards, the
+    # same convention integrate_v2.py's own preprocess() uses (adata.raw set
+    # right after normalize_total+log1p, before HVG subsetting). Needed for
+    # anything downstream that wants full-gene expression (pseudobulk
+    # correlation, marker-module scoring in embryo_to_cellline_trajectory.py)
+    # rather than just the ~n_top_genes atlas HVGs project_query_onto_reference
+    # restricts adata.X to.
+    print("\n-- Building full-gene log1p-normalised .raw layer --")
+    raw_full = query.copy()
+    sc.pp.normalize_total(raw_full, target_sum=1e4)
+    sc.pp.log1p(raw_full)
+
     ref = build_reference_embedding(
         ref, n_pcs=args.n_pcs, n_top_genes=args.n_top_genes, n_neighbors=args.k,
     )
 
     projected = project_query_onto_reference(ref, query, args.label_cols, k=args.k)
 
+    # Reattach by obs_names (not position) -- robust regardless of any
+    # internal reordering project_query_onto_reference's gene-padding/concat
+    # steps may have done.
+    projected.raw = raw_full[projected.obs_names].copy()
+
     # Name these explicitly rather than leaving them as the scanpy-default
     # 'X_umap'/'X_pca' keys, so it's unambiguous once this sits next to any
     # other embedding (e.g. integrate_v2.py's own Harmony one) on the same
-    # object.
-    projected.obsm["X_umap_atlas"] = projected.obsm.pop("X_umap")
-    projected.obsm["X_pca_atlas"]  = projected.obsm.pop("X_pca")
+    # object -- but ALSO keep the conventional 'X_umap' key so generic
+    # scanpy-based tooling (sc.pl.umap with no explicit basis, etc.) and
+    # embryo_to_cellline_trajectory.py's UMAP-overview section work
+    # unmodified against this object.
+    projected.obsm["X_umap_atlas"] = projected.obsm["X_umap"]
+    projected.obsm["X_pca_atlas"]  = projected.obsm["X_pca"]
+
+    # Backward-compat columns for scripts written against integrate_v2.py's
+    # output schema (e.g. embryo_to_cellline_trajectory.py):
+    #   - is_embryo: boolean, same "embryo" substring-in-source_file
+    #     convention the Snakefile's own EMBRYO_SAMPLE_IDS split already
+    #     uses, so this always agrees with how the rest of the pipeline
+    #     classifies samples.
+    #   - cell_type_<label>: integrate_v2.py coalesces atlas_<label>
+    #     (embryo cells) and embryo_<label> (cell line cells, transferred
+    #     via map_cellline_to_embryo.py) into one cell_type_<label> column
+    #     per cell. Every cell here already has atlas_<label> directly (all
+    #     cells were projected straight onto the atlas, no relay needed),
+    #     so cell_type_<label> is simply a copy -- this just saves
+    #     downstream scripts' detect_label_cols()-style helpers from falling
+    #     back with a warning.
+    # Intentionally NOT adding a fake 'leiden' column (there was no Leiden
+    # clustering step here) -- embryo_to_cellline_trajectory.py's Leiden-
+    # cluster-composition section already skips gracefully when 'leiden' is
+    # absent, and mislabeling atlas_<label> as 'leiden' would be misleading
+    # to anyone inspecting this object later. Similarly, cell-cycle 'phase'
+    # is NOT present -- that comes from rule annotate_cell_cycle's
+    # cyclum-based output (results/annotated_h5ad/), a different upstream
+    # path than the results/filtered_h5ad/ files this script reads directly;
+    # the trajectory script's cell-cycle section also skips gracefully.
+    projected.obs["is_embryo"] = projected.obs["source_file"].astype(str).str.contains(
+        "embryo", case=False,
+    )
+    if args.label_cols:
+        for col in args.label_cols:
+            atlas_col = f"atlas_{col}"
+            if atlas_col in projected.obs.columns:
+                projected.obs[f"cell_type_{col}"] = projected.obs[atlas_col]
 
     out_dir = os.path.dirname(args.out_path)
     if out_dir:
@@ -257,13 +329,16 @@ def main():
     print("=" * 60)
     print(f"-> {args.out_path}")
     print("Every cell -- embryo and cell line -- now carries atlas_<label> / "
-          "atlas_<label>_confidence and obsm['X_umap_atlas'] in the same "
-          "frozen coordinate system. To reuse integrate_v2.py's existing "
-          "analyze_condition_enrichment / analyze_titer_by_cluster on this "
-          "object as-is (they currently key off obs['leiden']), alias the "
-          "label column first:")
-    print("    adata.obs['leiden'] = adata.obs['atlas_annotation']")
-    print("    analyze_condition_enrichment(adata, fig_dir, sample)")
+          "cell_type_<label> / atlas_<label>_confidence, is_embryo, a "
+          "full-gene .raw layer, and obsm['X_umap']/['X_umap_atlas'] in the "
+          "same frozen coordinate system -- schema-compatible with "
+          "embryo_to_cellline_trajectory.py as-is. Two things it won't have: "
+          "'leiden' (no clustering step here -- that analysis section skips "
+          "gracefully) and 'phase' (cell-cycle -- comes from a different "
+          "upstream rule; that section skips gracefully too). Use "
+          "analyze_titer_by_annotation.py --groupby atlas_annotation for "
+          "titer analysis instead of integrate_v2.py's leiden-keyed "
+          "analyze_titer_by_cluster.")
 
 
 if __name__ == "__main__":
