@@ -1,0 +1,31 @@
+Conditions with both methods for comparison: []
+Conditions: ['Dsim-Merrill23', 'Dsim6B', 'Dsim6B-wMel', 'ubkhc', 'JW18wMel', 'Dsim-Merrill23-wRi-embryos', 'Dsim-w-wRi-embryos', 'ubkhc-wMel-embryos', 'JupiterGFP-wMel-embryos']
+Replicates: [1, 2]
+Sequencing Platforms: ['pipseq']
+Sample IDs: ['Dsim-Merrill23-1_pipseq', 'Dsim-Merrill23-2_pipseq', 'Dsim6B-1_pipseq', 'Dsim6B-2_pipseq', 'Dsim6B-wMel-1_pipseq', 'Dsim6B-wMel-2_pipseq', 'ubkhc-1_pipseq', 'ubkhc-2_pipseq', 'JW18wMel-1_pipseq', 'JW18wMel-2_pipseq', 'Dsim-Merrill23-wRi-embryos-1_pipseq', 'Dsim-w-wRi-embryos-1_pipseq', 'ubkhc-wMel-embryos-1_pipseq', 'JupiterGFP-wMel-embryos-1_pipseq']
+Condition-Platform combinations: [('Dsim-Merrill23', 'pipseq'), ('Dsim6B', 'pipseq'), ('Dsim6B-wMel', 'pipseq'), ('ubkhc', 'pipseq'), ('JW18wMel', 'pipseq'), ('Dsim-Merrill23-wRi-embryos', 'pipseq'), ('Dsim-w-wRi-embryos', 'pipseq'), ('ubkhc-wMel-embryos', 'pipseq'), ('JupiterGFP-wMel-embryos', 'pipseq')]
+Embryo sample IDs: ['Dsim-Merrill23-wRi-embryos-1_pipseq', 'Dsim-w-wRi-embryos-1_pipseq', 'ubkhc-wMel-embryos-1_pipseq', 'JupiterGFP-wMel-embryos-1_pipseq']
+Cell line sample IDs: ['Dsim-Merrill23-1_pipseq', 'Dsim-Merrill23-2_pipseq', 'Dsim6B-1_pipseq', 'Dsim6B-2_pipseq', 'Dsim6B-wMel-1_pipseq', 'Dsim6B-wMel-2_pipseq', 'ubkhc-1_pipseq', 'ubkhc-2_pipseq', 'JW18wMel-1_pipseq', 'JW18wMel-2_pipseq']
+WARNING: GTF not found for strain wRi_M23 (/private/groups/russelllab/jodie/scRNAseq/reference/NCBI_ref/wRi_M23/GCA_979474595.2_wRi_Merrill23_genomic.gtf) -- using fallback 16S region
+digraph snakemake_dag {
+    graph[bgcolor=white, margin=0];
+    node[shape=box, style=rounded, fontname=sans,                 fontsize=10, penwidth=2];
+    edge[penwidth=2, color=grey];
+	0[label = "all", color = "0.00 0.6 0.85", style="rounded"];
+	1[label = "integrate", color = "0.43 0.6 0.85", style="rounded"];
+	2[label = "filter_h5ad", color = "0.38 0.6 0.85", style="rounded"];
+	3[label = "map_pipseq", color = "0.57 0.6 0.85", style="rounded"];
+	4[label = "titer_by_annotation_atlas", color = "0.62 0.6 0.85", style="rounded"];
+	5[label = "embryo_to_cellline_trajectory", color = "0.33 0.6 0.85", style="rounded"];
+	6[label = "count_16s_reads", color = "0.29 0.6 0.85", style="rounded"];
+	7[label = "bwa_index_symbiont_genome", color = "0.14 0.6 0.85", style="rounded"];
+	1 -> 0
+	5 -> 0
+	4 -> 0
+	6 -> 0
+	2 -> 1
+	3 -> 2
+	1 -> 4
+	1 -> 5
+	7 -> 6
+}            
