@@ -5,7 +5,7 @@ logs/
 snakevision/
 .snakemake/
 /reference/
-
+.DS_Store
 
 <<<<<<< HEAD
 resources/
