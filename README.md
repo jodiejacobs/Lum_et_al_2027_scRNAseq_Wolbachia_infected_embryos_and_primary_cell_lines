@@ -33,6 +33,8 @@ Drop `-n` to actually launch jobs. `rule all` is the default target; `rule clean
 
 ## Pipeline structure
 
+![Pipeline rule graph](pipeline_rulegraph.svg)
+
 The current `rule all` DAG (see `pipeline_rulegraph.svg` / regenerate with `snakemake --rulegraph | dot -Tsvg > pipeline_rulegraph.svg`) has two independent arms that both feed the final target:
 
 **h5ad arm** — per sample, then joint:
