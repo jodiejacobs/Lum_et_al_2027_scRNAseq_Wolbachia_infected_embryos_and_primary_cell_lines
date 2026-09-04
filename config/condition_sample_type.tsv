@@ -1,0 +1,14 @@
+condition	sample_type
+Dsim-Merrill23	cell_culture
+Dsim6B	cell_culture
+Dsim6B-wMel	cell_culture
+ubkhc	cell_culture
+JW18wMel	cell_culture
+Dsim-Merrill23-wRi-embryos	embryo
+Dsim-w-wRi-embryos	embryo
+ubkhc-wMel-embryos	embryo
+JupiterGFP-wMel-embryos	embryo
+wMel_JupiterGFP_primary_cells	primary_cells
+wMel_Ubkhc_primary_cells	primary_cells
+wRi_Dsimw-_primary_cells	primary_cells
+wRi_Merrill23_primary_cells	primary_cells

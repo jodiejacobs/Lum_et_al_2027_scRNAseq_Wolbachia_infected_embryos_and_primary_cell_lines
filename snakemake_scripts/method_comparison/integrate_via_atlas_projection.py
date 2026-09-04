@@ -43,9 +43,12 @@ integrate_v2.py's own leiden-keyed analyze_titer_by_cluster on this object.
 Schema compatibility with embryo_to_cellline_trajectory.py
 --------------------------------------------------------------
 This is meant to be a drop-in replacement for integrate_v2.py's output as
-far as that script is concerned, so it also writes: is_embryo (bool, same
-"embryo"-in-source_file convention the Snakefile's EMBRYO_SAMPLE_IDS split
-already uses), cell_type_<label> (a copy of atlas_<label> -- integrate_v2.py
+far as that script is concerned, so it also writes: sample_type (embryo /
+primary_cells / cell_culture -- looked up from samples.csv's explicit
+sample_type column via --condition_sample_type when given, otherwise
+falling back to the old "embryo"-in-condition heuristic used by the
+Snakefile's EMBRYO_SAMPLE_IDS split) and is_embryo (bool alias, sample_type
+== "embryo", kept for backward compatibility), cell_type_<label> (a copy of atlas_<label> -- integrate_v2.py
 coalesces atlas_<label>/embryo_<label> into this name via its two-step
 relay; every cell here already has atlas_<label> directly, so it's just
 copied), a full-gene log1p-normalised .raw (needed for pseudobulk
@@ -151,19 +154,32 @@ def load_all_query_files(query_paths, dsim_to_dmel=None, dsim_ids=None, dmel_ids
     return query
 
 
-def add_sample_metadata(adata, batch_key="source_file"):
-    """Extract condition/replicate/method (and is_embryo/cell_line/
-    bio_condition aliases) from batch_key -- same parsing convention as
-    integrate_v2.py's add_metadata(), duplicated here rather than imported
-    so this default path doesn't pull in integrate_v2.py's heavier
-    dependencies (bbknn, sklearn, seaborn) just for one regex. Keep this in
-    sync with integrate_v2.py's add_metadata() if that ever changes, so
-    'condition' means the same thing regardless of which integration script
-    produced the object.
+def add_sample_metadata(adata, batch_key="source_file", condition_sample_type=None):
+    """Extract condition/replicate/method (and sample_type/is_embryo/
+    cell_line/bio_condition aliases) from batch_key -- same parsing
+    convention as integrate_v2.py's add_metadata(), duplicated here rather
+    than imported so this default path doesn't pull in integrate_v2.py's
+    heavier dependencies (bbknn, sklearn, seaborn) just for one regex. Keep
+    this in sync with integrate_v2.py's add_metadata() if that ever
+    changes, so 'condition' means the same thing regardless of which
+    integration script produced the object.
 
     batch_key values are the per-sample h5ad basename (set as
     obs['source_file'] in load_all_query_files above), i.e. samples.csv's
     "{condition}-{replicate}_{seq_platform}" sample_id (see Snakefile).
+
+    condition_sample_type: optional {condition: sample_type} dict, with
+    sample_type in {"embryo", "primary_cells", "cell_culture"}. Built by
+    the Snakefile straight from samples.csv's explicit sample_type column
+    (config/condition_sample_type.tsv, regenerated on every Snakefile
+    parse) and passed in via --condition_sample_type -- this is now the
+    single source of truth for sample_type, added when primary_cells was
+    introduced as a third category between whole embryos and established
+    cell_culture lines (previously this was all inferred here by checking
+    whether "embryo" appeared in the condition string, which had no way to
+    represent a third category). Falls back to that old binary heuristic,
+    collapsing everything non-embryo to "cell_culture", if not given --
+    e.g. for ad hoc manual runs without the Snakefile's lookup table.
     """
     parsed = adata.obs[batch_key].astype(str).str.extract(
         r"^(?P<condition>.+)-(?P<replicate>\d+)_(?P<method>10x|pipseq)$"
@@ -178,7 +194,22 @@ def add_sample_metadata(adata, batch_key="source_file"):
     adata.obs["condition"] = parsed["condition"].fillna(adata.obs[batch_key]).astype(str)
     adata.obs["replicate"] = parsed["replicate"].fillna("unknown").astype(str)
     adata.obs["method"]    = parsed["method"].fillna("unknown").astype(str)
-    adata.obs["is_embryo"] = adata.obs["condition"].str.contains("embryo", case=False)
+
+    embryo_fallback = np.where(
+        adata.obs["condition"].str.contains("embryo", case=False),
+        "embryo", "cell_culture")
+    if condition_sample_type:
+        missing = sorted(set(adata.obs["condition"]) - set(condition_sample_type))
+        if missing:
+            print(f"  WARNING: condition(s) {missing} not found in "
+                  "--condition_sample_type -- falling back to the 'embryo' "
+                  "in condition heuristic for these.")
+        adata.obs["sample_type"] = adata.obs["condition"].map(condition_sample_type)
+        adata.obs["sample_type"] = adata.obs["sample_type"].fillna(
+            pd.Series(embryo_fallback, index=adata.obs.index))
+    else:
+        adata.obs["sample_type"] = embryo_fallback
+    adata.obs["is_embryo"] = adata.obs["sample_type"] == "embryo"
 
     # Aliases kept for parity with integrate_v2.py's output schema (some
     # downstream code, e.g. embryo_to_cellline_trajectory.py, reads these).
@@ -193,16 +224,10 @@ def plot_diagnostics(query, label_cols, fig_dir):
     query = query.copy()
     query.obsm["X_umap"] = query.obsm["X_umap_atlas"]
 
-    # Embryo vs. cell line -- reuse obs['is_embryo'] (set in
-    # add_sample_metadata, same "embryo" substring convention the
-    # Snakefile's own EMBRYO_SAMPLE_IDS split already uses) rather than
-    # re-deriving it here, so this always agrees with the object's own
-    # is_embryo column.
-    query.obs["_origin"] = np.where(query.obs["is_embryo"], "embryo", "cell_line")
-
     print(f"\n-- Diagnostic plots -- writing to {fig_dir}/ --")
-    sc.pl.umap(query, color="_origin", save="_origin.pdf",
-               title="Cell line vs. embryo, both projected onto the atlas")
+    sc.pl.umap(query, color="sample_type", save="_origin.pdf",
+               title="Sample type (embryo / primary cells / cell culture), "
+                     "all projected onto the atlas")
     sc.pl.umap(query, color="source_file", save="_source_file.pdf",
                title="Every sample, atlas-projected")
 
@@ -259,6 +284,13 @@ def main():
     parser.add_argument("--n_top_genes", type=int, default=3000)
     parser.add_argument("--subsample_ref", type=int, default=None)
     parser.add_argument("--fig_dir", default=None)
+    parser.add_argument("--condition_sample_type", default=None,
+                         help="Path to a 2-column TSV (condition, sample_type) "
+                              "-- config/condition_sample_type.tsv, regenerated "
+                              "by the Snakefile from samples.csv's sample_type "
+                              "column. Omit to fall back to inferring "
+                              "embryo/cell_culture from 'embryo' appearing in "
+                              "the condition string (2-way only).")
     args = parser.parse_args()
 
     query_paths = []
@@ -291,7 +323,12 @@ def main():
     # obs['condition']) sees it on both adata.X and adata.raw.
     print("\n-- Extracting sample metadata (condition/replicate/method) from "
           "source_file --")
-    query = add_sample_metadata(query, batch_key="source_file")
+    condition_sample_type = None
+    if args.condition_sample_type:
+        lut = pd.read_csv(args.condition_sample_type, sep="\t", index_col=0)
+        condition_sample_type = lut.iloc[:, 0].to_dict()
+    query = add_sample_metadata(query, batch_key="source_file",
+                                 condition_sample_type=condition_sample_type)
     print(query.obs["condition"].value_counts().to_string())
 
     # Full-gene, log1p-normalised copy BEFORE the projection step restricts

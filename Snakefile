@@ -15,7 +15,11 @@ SRA_TOOLS_ENV = config["sra_tools_env"]
 
 
 # Load samples information
-# Columns: 0=condition, 1=genome, 2=seq_platform, 3=replicate, 4=R1, 5=R2
+# Columns: 0=condition, 1=genome, 2=seq_platform, 3=replicate, 4=R1, 5=R2,
+# 6=sample_type (embryo / primary_cells / cell_culture -- explicit column
+# added when primary_cells was introduced as a third category between
+# whole embryos and established, continuously-cultured cell lines; see
+# EMBRYO_SAMPLE_IDS / PRIMARY_CELLS_SAMPLE_IDS / CELL_CULTURE_SAMPLE_IDS below)
 samples_df = pd.read_csv(config["samples_file"], header=None, sep=',')
 samples_df = samples_df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
 
@@ -39,17 +43,47 @@ if _dupe_ids:
 # Get actual sample IDs that exist
 SAMPLE_IDS = samples_df.index.tolist()
 
-# Split samples into embryo vs. primary-cell-line datasets by condition name
-# (column 0 of samples.csv) -- "embryo" appears in every embryo condition
-# (ubkhc-wMel-embryos, Dsim-Merrill23-wRi-embryos, ...) and in none of the
-# cultured cell line conditions (JW18wMel, ubkhc, Dsim6B, Dsim6B-wMel,
-# Dsim-Merrill23, ...). Used to route embryo samples through the Flysta3D-v2
-# atlas cell-type transfer (rule annotate_with_atlas) and cell line samples
-# through the embryo-reference transfer (rule map_celllines_to_embryo)
-# before both arms feed into rule integrate.
-EMBRYO_SAMPLE_IDS = [s for s in SAMPLE_IDS
-                      if "embryo" in str(samples_df.loc[s][0]).lower()]
-CELLLINE_SAMPLE_IDS = [s for s in SAMPLE_IDS if s not in EMBRYO_SAMPLE_IDS]
+# Validate the explicit sample_type column (column 6) -- added when
+# primary_cells was introduced as a third category between whole embryos
+# and established cell_culture lines. This used to be inferred by checking
+# whether "embryo" appeared in the condition string (column 0), which had
+# no way to represent a third category; samples.csv now says explicitly
+# what each row is, so a typo in the condition name (e.g. a sample missing
+# "embryo"/"primary_cells" in its name) can't silently misclassify it.
+_ALLOWED_SAMPLE_TYPES = {"embryo", "primary_cells", "cell_culture"}
+_bad_sample_types = sorted(set(samples_df[6].astype(str).str.strip()) - _ALLOWED_SAMPLE_TYPES)
+if _bad_sample_types:
+    raise ValueError(
+        f"Unrecognized sample_type value(s) in {config['samples_file']}: {_bad_sample_types}. "
+        f"Column 7 (0-indexed 6) of every row must be one of {sorted(_ALLOWED_SAMPLE_TYPES)}."
+    )
+
+# Split samples by sample_type (column 6). EMBRYO_SAMPLE_IDS routes embryo
+# samples through the Flysta3D-v2 atlas cell-type transfer (rule
+# annotate_with_atlas); PRIMARY_CELLS_SAMPLE_IDS and CELL_CULTURE_SAMPLE_IDS
+# are the finer 3-way split (used for per-sample-type metadata/analysis --
+# see condition_sample_type.tsv below); CELLLINE_SAMPLE_IDS keeps its
+# original meaning (everything non-embryo) since routing through the
+# embryo-reference transfer (rule map_celllines_to_embryo) is the same for
+# primary_cells and cell_culture samples -- both need the embryo bridge,
+# not the atlas directly -- before both arms feed into rule integrate.
+EMBRYO_SAMPLE_IDS        = [s for s in SAMPLE_IDS if samples_df.loc[s][6] == "embryo"]
+PRIMARY_CELLS_SAMPLE_IDS = [s for s in SAMPLE_IDS if samples_df.loc[s][6] == "primary_cells"]
+CELL_CULTURE_SAMPLE_IDS  = [s for s in SAMPLE_IDS if samples_df.loc[s][6] == "cell_culture"]
+CELLLINE_SAMPLE_IDS      = PRIMARY_CELLS_SAMPLE_IDS + CELL_CULTURE_SAMPLE_IDS
+
+# condition -> sample_type lookup, regenerated from samples.csv on every
+# Snakefile parse (dry runs included) so it can never drift out of sync.
+# Single source of truth for the standalone scripts (integrate_via_atlas_
+# projection.py, embryo_to_cellline_trajectory.py, analyze_titer_by_
+# annotation.py) that operate on globbed h5ad files after the fact and
+# have no access to samples.csv itself -- see --condition_sample_type in
+# rule integrate below.
+CONDITION_SAMPLE_TYPE_PATH = "config/condition_sample_type.tsv"
+_condition_sample_type = samples_df.drop_duplicates(subset=[0]).set_index(0)[6]
+_condition_sample_type.rename_axis("condition").rename("sample_type").to_csv(
+    CONDITION_SAMPLE_TYPE_PATH, sep="\t"
+)
 
 CONDITIONS = samples_df[0].unique().tolist()
 REPLICATES = samples_df[3].unique().tolist()
@@ -88,7 +122,9 @@ print(f"Sequencing Platforms: {SEQUENCING_PLATFORMS}")
 print(f"Sample IDs: {SAMPLE_IDS}")
 print(f"Condition-Platform combinations: {CONDITION_PLATFORM_COMBOS}")
 print(f"Embryo sample IDs: {EMBRYO_SAMPLE_IDS}")
-print(f"Cell line sample IDs: {CELLLINE_SAMPLE_IDS}")
+print(f"Primary cells sample IDs: {PRIMARY_CELLS_SAMPLE_IDS}")
+print(f"Cell culture sample IDs: {CELL_CULTURE_SAMPLE_IDS}")
+print(f"Cell line sample IDs (primary_cells + cell_culture): {CELLLINE_SAMPLE_IDS}")
 
 # Helper function to get fastq files for a sample
 def get_fastq_files(sample_id):
@@ -691,6 +727,7 @@ rule integrate:
             f"--subsample_ref {config['atlas_subsample_ref']}"
             if config.get("atlas_subsample_ref") else ""
         ),
+        condition_sample_type = CONDITION_SAMPLE_TYPE_PATH,
     log:
         "logs/integrate/integrate.log"
     threads:
@@ -716,6 +753,7 @@ rule integrate:
             --ortholog_map {input.orthologs} \
             --k {params.k} \
             --n_pcs {params.n_pcs} \
+            --condition_sample_type {params.condition_sample_type} \
             {params.label_cols_flag} \
             {params.subsample_flag}
 
@@ -744,6 +782,7 @@ rule titer_by_annotation_atlas:
         groupby     = config.get("titer_groupby",
                           f"atlas_{config['atlas_label_cols'][0]}" if config.get("atlas_label_cols") else "atlas_annotation"),
         condition_col = config.get("titer_condition_col", "condition"),
+        origin_col  = config.get("titer_origin_col", "sample_type"),
         sample      = "wolbachia_infection",
     log:
         "logs/integrate/titer_by_annotation.log"
@@ -765,6 +804,7 @@ rule titer_by_annotation_atlas:
             --adata {input.h5ad} \
             --groupby {params.groupby} \
             --condition_col {params.condition_col} \
+            --origin_col {params.origin_col} \
             --fig_dir {params.fig_dir} \
             --sample {params.sample}
 

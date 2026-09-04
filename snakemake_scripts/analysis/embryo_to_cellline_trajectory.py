@@ -17,7 +17,7 @@ resemble":
      type calls per condition (whole embryos should be far more diverse
      than an established line).
   3. Label-transfer confidence as a drift metric -- per condition, split by
-     embryo vs. cell line.
+     sample_type (embryo / primary_cells / cell_culture).
   4. Pseudobulk correlation -- condition-level and tissue-level pseudobulk
      profiles (full gene set, log1p), hierarchically clustered, so you can
      see which conditions/tissues actually resemble each other
@@ -36,8 +36,9 @@ resemble":
   8. Host species check (Dmel vs. Dsim) -- since Dsim samples only reach
      the embryo atlas via ortholog remapping, a quick QC/biology check on
      whether their tissue calls are as confident/consistent as Dmel's.
-  9. Leiden cluster composition -- cluster x embryo/cell-line and cluster x
-     cell type, complementing integrate_v2.py's own condition-enrichment
+  9. Leiden cluster composition -- cluster x sample_type (embryo/primary_cells/
+     cell_culture) and cluster x cell type, complementing integrate_v2.py's
+     own condition-enrichment
      analysis with a cell-type-aware view.
   10. UMAP overview -- one plot per key variable for a quick visual pass.
 
@@ -75,23 +76,42 @@ def _savefig(fig, path):
     print(f"   Saved: {path}")
 
 
+_SAMPLE_TYPE_ORDER  = ["embryo", "primary_cells", "cell_culture"]
+_SAMPLE_TYPE_COLORS = {"embryo": "#4CAF50", "primary_cells": "#42A5F5", "cell_culture": "#FF7043"}
+
+
 def _condition_order(obs):
-    """Embryo conditions first (sorted), then cell line conditions (sorted)
-    -- used to keep every bar/box plot in a consistent, biologically
-    grouped order with embryos and cell lines visually separated."""
-    df = obs[["condition", "is_embryo"]].drop_duplicates()
-    embryo   = sorted(df.loc[df["is_embryo"].astype(bool), "condition"])
-    cellline = sorted(df.loc[~df["is_embryo"].astype(bool), "condition"])
-    return embryo + cellline
+    """Embryo conditions first (sorted), then primary_cells conditions
+    (sorted), then established cell_culture conditions (sorted) -- used to
+    keep every bar/box plot in a consistent, biologically grouped order
+    with the three sample types visually separated. sample_type comes from
+    samples.csv's explicit sample_type column (see the Snakefile and
+    add_sample_metadata() in integrate_via_atlas_projection.py /
+    integrate_v2.py), not from pattern-matching the condition string."""
+    df = obs[["condition", "sample_type"]].drop_duplicates()
+    ordered = []
+    for st in _SAMPLE_TYPE_ORDER:
+        ordered += sorted(df.loc[df["sample_type"] == st, "condition"])
+    known = set(ordered)
+    ordered += sorted(c for c in df["condition"] if c not in known)
+    return ordered
 
 
-def _embryo_cellline_divider(ax, order, obs):
-    """Draw a vertical dashed line between the embryo and cell line groups
-    on a categorical x-axis using the order returned by _condition_order."""
-    df = obs[["condition", "is_embryo"]].drop_duplicates().set_index("condition")
-    n_embryo = int(df.loc[order, "is_embryo"].astype(bool).sum())
-    if 0 < n_embryo < len(order):
-        ax.axvline(n_embryo - 0.5, color="black", lw=1.2, ls="--", alpha=0.6)
+def _sample_type_divider(ax, order, obs):
+    """Draw a vertical dashed line at each boundary between sample_type
+    groups on a categorical x-axis using the order returned by
+    _condition_order (replaces the old binary _embryo_cellline_divider)."""
+    df = obs[["condition", "sample_type"]].drop_duplicates().set_index("condition")
+    types_in_order = [df.loc[c, "sample_type"] if c in df.index else None for c in order]
+    for i in range(1, len(types_in_order)):
+        if types_in_order[i] != types_in_order[i - 1]:
+            ax.axvline(i - 0.5, color="black", lw=1.2, ls="--", alpha=0.6)
+
+
+def _sample_type_bar_colors(labels):
+    """Map a sequence of sample_type values to their plot colors, falling
+    back to grey for anything unexpected."""
+    return [_SAMPLE_TYPE_COLORS.get(v, "#9E9E9E") for v in labels]
 
 
 _MISSING_LABEL_STRINGS = {"NA", "nan", "None", "none", ""}
@@ -210,7 +230,7 @@ def analyze_composition(adata, label_cols, fig_dir, conf_threshold):
         ct.plot(kind="bar", stacked=True, ax=ax,
                 color=[cmap(i) for i in range(n_types)],
                 edgecolor="black", linewidth=0.3)
-        _embryo_cellline_divider(ax, [c for c in order if c in ct.index], adata.obs)
+        _sample_type_divider(ax, [c for c in order if c in ct.index], adata.obs)
         ax.set_xlabel("Condition")
         ax.set_ylabel(f"% of cells (confidence >= {conf_threshold})")
         ax.set_title(f"Cell type composition by condition -- {col}")
@@ -241,7 +261,7 @@ def analyze_diversity(adata, label_cols, fig_dir, conf_threshold):
                 continue
             H = float(scipy.stats.entropy(vc.values, base=2))
             rows.append(dict(label_col=col, condition=cond,
-                              is_embryo=bool(g["is_embryo"].iloc[0]),
+                              sample_type=str(g["sample_type"].iloc[0]),
                               shannon_entropy=H, n_types=len(vc), n_cells=len(g)))
 
     df = pd.DataFrame(rows)
@@ -253,7 +273,7 @@ def analyze_diversity(adata, label_cols, fig_dir, conf_threshold):
             continue
         present = [c for c in order if c in sub.index]
         sub = sub.reindex(present).dropna(subset=["shannon_entropy"])
-        colors = ["#4CAF50" if e else "#FF7043" for e in sub["is_embryo"]]
+        colors = _sample_type_bar_colors(sub["sample_type"])
         fig, ax = plt.subplots(figsize=(max(10, len(sub) * 0.6), 5))
         ax.bar(range(len(sub)), sub["shannon_entropy"].values, color=colors,
                edgecolor="black", linewidth=0.4)
@@ -261,7 +281,7 @@ def analyze_diversity(adata, label_cols, fig_dir, conf_threshold):
         ax.set_xticklabels(sub.index, rotation=45, ha="right")
         ax.set_ylabel("Shannon entropy (bits)")
         ax.set_title(f"Cell type diversity by condition -- {col}\n"
-                      "(green=embryo, orange=cell line)")
+                      "(green=embryo, blue=primary cells, orange=cell culture)")
         _savefig(fig, os.path.join(fig_dir, f"diversity_{col}.pdf"))
 
 
@@ -278,15 +298,16 @@ def analyze_confidence(adata, label_cols, fig_dir):
         conf_col = f"{col}_confidence"
         if conf_col not in adata.obs.columns:
             continue
-        obs = adata.obs[["condition", "is_embryo", conf_col]].dropna()
+        obs = adata.obs[["condition", "sample_type", conf_col]].dropna()
         stats = obs.groupby("condition")[conf_col].agg(["mean", "median", "std", "count"])
         stats.to_csv(os.path.join(fig_dir, f"confidence_summary_{col}.csv"))
 
         present_order = [c for c in order if c in obs["condition"].unique()]
         fig, ax = plt.subplots(figsize=(max(10, len(present_order) * 0.6), 5))
-        sns.boxplot(data=obs, x="condition", y=conf_col, hue="is_embryo",
+        sns.boxplot(data=obs, x="condition", y=conf_col, hue="sample_type",
+                    hue_order=[t for t in _SAMPLE_TYPE_ORDER if t in obs["sample_type"].unique()],
                     order=present_order, ax=ax, showfliers=False)
-        _embryo_cellline_divider(ax, present_order, adata.obs)
+        _sample_type_divider(ax, present_order, adata.obs)
         ax.set_ylim(0, 1.05)
         ax.set_ylabel(f"KNN confidence ({col})")
         ax.set_title(f"Label transfer confidence by condition -- {col}")
@@ -316,7 +337,7 @@ def analyze_pseudobulk(adata_full, label_cols, fig_dir, min_cells):
         print(f"   Saved: {os.path.join(fig_dir, 'pseudobulk_condition_correlation.pdf')}")
 
     # 4b. condition pseudobulk vs. embryo-tissue-level pseudobulk (embryo cells only)
-    embryo_mask = adata_full.obs["is_embryo"].astype(bool).values
+    embryo_mask = (adata_full.obs["sample_type"] == "embryo").values
     for col in label_cols:
         if col not in adata_full.obs.columns:
             continue
@@ -362,7 +383,7 @@ def analyze_markers(adata_full, label_cols, fig_dir, min_cells, top_n):
     for col in label_cols:
         if col not in adata_full.obs.columns:
             continue
-        embryo_mask = adata_full.obs["is_embryo"].astype(bool).values
+        embryo_mask = (adata_full.obs["sample_type"] == "embryo").values
         sub = adata_full[embryo_mask].copy()
         sub.obs[col] = _clean_label_series(sub.obs[col])
         vc = sub.obs[col].value_counts()
@@ -446,7 +467,7 @@ def analyze_cell_cycle(adata, fig_dir):
     fig, ax = plt.subplots(figsize=(max(10, len(ct) * 0.6), 6))
     ct.plot(kind="bar", stacked=True, ax=ax, edgecolor="black", linewidth=0.3,
             colormap="Set2")
-    _embryo_cellline_divider(ax, present_order, adata.obs)
+    _sample_type_divider(ax, present_order, adata.obs)
     ax.set_ylabel("% of cells")
     ax.set_title("Cell cycle phase composition by condition")
     ax.legend(title="Phase", bbox_to_anchor=(1.02, 1), loc="upper left")
@@ -457,22 +478,23 @@ def analyze_cell_cycle(adata, fig_dir):
     cyc = (adata.obs.groupby("condition")["_cycling"].mean() * 100).reindex(present_order)
     cyc.to_csv(os.path.join(fig_dir, "cellcycle_cycling_fraction.csv"))
     fig, ax = plt.subplots(figsize=(max(10, len(cyc) * 0.6), 5))
-    colors = ["#4CAF50" if adata.obs.loc[adata.obs["condition"] == c, "is_embryo"].iloc[0]
-              else "#FF7043" for c in cyc.index]
+    cond_to_type = adata.obs.drop_duplicates("condition").set_index("condition")["sample_type"]
+    colors = _sample_type_bar_colors(cond_to_type.reindex(cyc.index))
     ax.bar(range(len(cyc)), cyc.values, color=colors, edgecolor="black", linewidth=0.4)
     ax.set_xticks(range(len(cyc)))
     ax.set_xticklabels(cyc.index, rotation=45, ha="right")
     ax.set_ylabel("% cycling cells (S/G2M)")
-    ax.set_title("Cycling fraction by condition (green=embryo, orange=cell line)")
+    ax.set_title("Cycling fraction by condition (green=embryo, blue=primary cells, orange=cell culture)")
     _savefig(fig, os.path.join(fig_dir, "cellcycle_cycling_fraction.pdf"))
 
     for score_col in ["S_score", "G2M_score"]:
         if score_col not in adata.obs.columns:
             continue
         fig, ax = plt.subplots(figsize=(max(10, len(present_order) * 0.6), 5))
-        sns.boxplot(data=adata.obs, x="condition", y=score_col, hue="is_embryo",
+        sns.boxplot(data=adata.obs, x="condition", y=score_col, hue="sample_type",
+                    hue_order=[t for t in _SAMPLE_TYPE_ORDER if t in adata.obs["sample_type"].unique()],
                     order=present_order, ax=ax, showfliers=False)
-        _embryo_cellline_divider(ax, present_order, adata.obs)
+        _sample_type_divider(ax, present_order, adata.obs)
         ax.set_title(f"{score_col} by condition")
         plt.xticks(rotation=45, ha="right")
         _savefig(fig, os.path.join(fig_dir, f"cellcycle_{score_col}.pdf"))
@@ -490,7 +512,12 @@ def analyze_wolbachia(adata, label_cols, fig_dir):
         print("   No 'wolbachia_titer' column -- skipping")
         return
 
-    cellline = adata.obs.loc[~adata.obs["is_embryo"].astype(bool)].copy()
+    # "cellline" here means every cultured sample (primary_cells AND
+    # cell_culture) -- both go through the same infection/cycling analysis;
+    # sample_type stays in the frame so you can split further (e.g. does
+    # titer/cycling differ between primary_cells and established cell_culture
+    # lines) if you want to look.
+    cellline = adata.obs.loc[adata.obs["sample_type"] != "embryo"].copy()
     cellline["_infected"] = cellline["wolbachia_titer"].astype(float) > 0
 
     # 7a. titer vs. confidence, per label
@@ -516,7 +543,7 @@ def analyze_wolbachia(adata, label_cols, fig_dir):
     for col in label_cols:
         if col not in cellline.columns:
             continue
-        ct = pd.crosstab([cellline["condition"], cellline["_infected"]],
+        ct = pd.crosstab([cellline["sample_type"], cellline["condition"], cellline["_infected"]],
                           cellline[col], normalize="index") * 100
         ct.to_csv(os.path.join(fig_dir, f"wolbachia_composition_by_infection_{col}.csv"))
 
@@ -545,7 +572,7 @@ def analyze_species(adata, label_cols, fig_dir):
     print("=" * 70)
     adata.obs["_species"] = np.where(
         adata.obs["condition"].astype(str).str.contains("dsim", case=False), "Dsim", "Dmel")
-    cellline = adata.obs.loc[~adata.obs["is_embryo"].astype(bool)].copy()
+    cellline = adata.obs.loc[adata.obs["sample_type"] != "embryo"].copy()
 
     for col in label_cols:
         conf_col = f"{col}_confidence"
@@ -575,16 +602,17 @@ def analyze_cluster_composition(adata, label_cols, fig_dir):
         print("   No 'leiden' column -- skipping")
         return
 
-    ct = pd.crosstab(adata.obs["leiden"], adata.obs["is_embryo"], normalize="index") * 100
-    ct.to_csv(os.path.join(fig_dir, "cluster_composition_is_embryo.csv"))
+    ct = pd.crosstab(adata.obs["leiden"], adata.obs["sample_type"], normalize="index") * 100
+    ct = ct.reindex(columns=[t for t in _SAMPLE_TYPE_ORDER if t in ct.columns])
+    ct.to_csv(os.path.join(fig_dir, "cluster_composition_sample_type.csv"))
     fig, ax = plt.subplots(figsize=(max(8, len(ct) * 0.5), 5))
     ct.plot(kind="bar", stacked=True, ax=ax, edgecolor="black", linewidth=0.3,
-            color=["#FF7043", "#4CAF50"])
+            color=[_SAMPLE_TYPE_COLORS[t] for t in ct.columns])
     ax.set_xlabel("Leiden cluster")
     ax.set_ylabel("% of cells")
-    ax.set_title("Embryo vs. cell line composition per cluster")
-    ax.legend(title="is_embryo", bbox_to_anchor=(1.02, 1), loc="upper left")
-    _savefig(fig, os.path.join(fig_dir, "cluster_composition_is_embryo.pdf"))
+    ax.set_title("Sample-type composition per cluster (embryo / primary cells / cell culture)")
+    ax.legend(title="sample_type", bbox_to_anchor=(1.02, 1), loc="upper left")
+    _savefig(fig, os.path.join(fig_dir, "cluster_composition_sample_type.pdf"))
 
     for col in label_cols:
         if col not in adata.obs.columns:
@@ -614,7 +642,7 @@ def plot_umap_overview(adata, label_cols, fig_dir):
         return
     sc.settings.figdir = fig_dir
 
-    quick_vars = [v for v in ["is_embryo", "leiden", "method", "wolbachia_titer", "phase"]
+    quick_vars = [v for v in ["sample_type", "leiden", "method", "wolbachia_titer", "phase"]
                   if v in adata.obs.columns]
     if quick_vars:
         sc.pl.umap(adata, color=quick_vars, ncols=3, save="_overview_summary.pdf", show=False)
@@ -655,11 +683,25 @@ def main():
     adata = sc.read_h5ad(args.input)
     print(f"  {adata.n_obs:,} cells x {adata.n_vars:,} genes")
 
-    for required in ("condition", "is_embryo"):
-        if required not in adata.obs.columns:
+    if "condition" not in adata.obs.columns:
+        raise ValueError(
+            f"adata.obs is missing 'condition' -- is {args.input} really "
+            "the output of integrate_v2.py's / integrate_via_atlas_projection.py's "
+            "add_metadata()/add_sample_metadata()?"
+        )
+    if "sample_type" not in adata.obs.columns:
+        if "is_embryo" in adata.obs.columns:
+            print("  WARNING: adata.obs has no 'sample_type' column (this "
+                  "object predates the primary_cells category) -- falling "
+                  "back to a 2-way embryo/cell_culture split derived from "
+                  "'is_embryo'. Rerun rule integrate to get primary_cells "
+                  "distinguished from established cell_culture lines.")
+            adata.obs["sample_type"] = np.where(
+                adata.obs["is_embryo"].astype(bool), "embryo", "cell_culture")
+        else:
             raise ValueError(
-                f"adata.obs is missing '{required}' -- is {args.input} really "
-                "the output of integrate_v2.py's add_metadata()?"
+                f"adata.obs is missing both 'sample_type' and 'is_embryo' -- "
+                f"is {args.input} really the output of add_sample_metadata()?"
             )
 
     label_cols = detect_label_cols(adata)
@@ -668,9 +710,8 @@ def main():
         print("  WARNING: no cell type label columns found at all -- "
               "composition/diversity/marker analyses will be skipped.")
 
-    n_embryo   = int(adata.obs["is_embryo"].astype(bool).sum())
-    n_cellline = adata.n_obs - n_embryo
-    print(f"  {n_embryo:,} embryo cells, {n_cellline:,} cell line cells")
+    type_counts = adata.obs["sample_type"].value_counts()
+    print(f"  Cells by sample_type: {type_counts.to_dict()}")
     print(f"  Conditions: {_condition_order(adata.obs)}")
 
     if label_cols:

@@ -235,8 +235,20 @@ def remap_dsim_to_dmel(adata, dsim_to_dmel, label=""):
 # JW18-only DOX->wMel infection time-course experiment that doesn't apply to
 # this project's embryo + primary-cell-line design.
 
-def add_metadata(adata, batch_key):
-    """Extract sample metadata from batch/filename strings."""
+def add_metadata(adata, batch_key, condition_sample_type=None):
+    """Extract sample metadata from batch/filename strings.
+
+    condition_sample_type: optional {condition: sample_type} dict, with
+    sample_type in {"embryo", "primary_cells", "cell_culture"} -- see the
+    matching parameter in integrate_via_atlas_projection.py's
+    add_sample_metadata(), which this should be kept in sync with. Not
+    currently wired up by any active Snakefile rule (this script isn't on
+    the critical path -- see rule integrate's docstring), so most of this
+    file's own downstream analysis still reads the 2-way is_embryo alias
+    only; pass this through if you extend it to read sample_type directly.
+    Falls back to the old binary "embryo" in condition heuristic
+    (collapsing primary_cells and cell_culture together) if not given.
+    """
     parsed = adata.obs[batch_key].str.extract(
         r"^(?P<condition>.+)-(?P<replicate>\d+)_(?P<method>10x|pipseq)$"
     )
@@ -250,7 +262,17 @@ def add_metadata(adata, batch_key):
     adata.obs["condition"] = parsed["condition"].fillna(adata.obs[batch_key]).astype(str)
     adata.obs["replicate"] = parsed["replicate"].fillna("unknown").astype(str)
     adata.obs["method"]    = parsed["method"].fillna("unknown").astype(str)
-    adata.obs["is_embryo"] = adata.obs["condition"].str.contains("embryo", case=False)
+
+    embryo_fallback = np.where(
+        adata.obs["condition"].str.contains("embryo", case=False),
+        "embryo", "cell_culture")
+    if condition_sample_type:
+        adata.obs["sample_type"] = adata.obs["condition"].map(condition_sample_type)
+        adata.obs["sample_type"] = adata.obs["sample_type"].fillna(
+            pd.Series(embryo_fallback, index=adata.obs.index))
+    else:
+        adata.obs["sample_type"] = embryo_fallback
+    adata.obs["is_embryo"] = adata.obs["sample_type"] == "embryo"
 
     # Kept for backwards compatibility with the plotting/analysis code below
     # (and with integrate_by_ref.py, which also expects a "cell_line" and

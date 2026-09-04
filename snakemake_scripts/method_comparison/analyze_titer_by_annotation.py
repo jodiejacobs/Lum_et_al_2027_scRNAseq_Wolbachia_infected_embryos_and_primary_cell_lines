@@ -200,7 +200,7 @@ def analyze_titer_by_annotation(adata, fig_dir, sample, groupby="atlas_annotatio
                     ax=ax, flierprops=dict(markersize=1), order=groups)
         ax.set_xlabel(groupby)
         ax.set_ylabel(f"{titer_col} (infected cells only)")
-        ax.set_title(f"Titer by {groupby}, embryo vs. cell line -- {sample}")
+        ax.set_title(f"Titer by {groupby}, by {origin_col} -- {sample}")
         ax.legend(title=origin_col, bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
