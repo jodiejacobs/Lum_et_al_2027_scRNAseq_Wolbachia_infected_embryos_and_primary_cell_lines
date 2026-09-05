@@ -889,9 +889,9 @@ rule count_16s_reads:
         "logs/count_16s/{sample_id}_{gene}.log"
     threads: 16
     resources:
-        slurm_partition = "medium",
-        mem_mb          = 32000,
-        slurm_time      = "4:00:00"
+        slurm_partition = "long",
+        mem_mb          = 64000,
+        slurm_time      = "24:00:00"
     shell:
         """
         exec > {log} 2>&1
