@@ -891,7 +891,7 @@ rule count_16s_reads:
     resources:
         slurm_partition = "medium",
         mem_mb          = 32000,
-        slurm_time      = "2:00:00"
+        slurm_time      = "4:00:00"
     shell:
         """
         exec > {log} 2>&1
