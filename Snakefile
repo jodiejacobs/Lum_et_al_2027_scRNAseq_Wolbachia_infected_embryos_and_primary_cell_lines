@@ -928,6 +928,12 @@ rule count_16s_reads:
         # Mapped reads only (optional denominator if you prefer mapped over total)
         MAPPED=$(samtools view -c -F 0x4 $SORTED)
 
+        # BAM and its index were only needed for the three counts above --
+        # remove them now that they've been read for the last time, so a
+        # full per-sample alignment BAM doesn't accumulate under
+        # results/rRNA_analysis/read_counts/
+        rm -f $SORTED $SORTED.bai
+
         # Write tab-delimited summary
         printf "sample\\tgene\\tregion\\tsixteenS_reads\\ttotal_reads\\tmapped_reads\\n" > {output.counts}
         printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" \
