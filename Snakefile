@@ -914,9 +914,15 @@ def pt_symbiont_gtfs(wildcards):
 wildcard_constraints:
     species = "|".join(PT_SPECIES) if PT_SPECIES else "NONE"
 
+# conda.sh is located from the env path itself (miniforge3/envs/scanpy ->
+# miniforge3), since `which conda` is empty in non-interactive SLURM shells.
+# set +u around activation: conda's activate scripts reference unset vars.
+CONDA_BASE = os.path.dirname(os.path.dirname(SCANPY_ENV))
 PT_ACTIVATE = """
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 """
 
 rule pseudotime_prepare:

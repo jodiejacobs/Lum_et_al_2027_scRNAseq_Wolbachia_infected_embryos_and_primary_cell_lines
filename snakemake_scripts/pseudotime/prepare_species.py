@@ -252,6 +252,12 @@ def main():
     adata.obs[["species", "lineage", "condition", "sample_type", "stage_numeric",
                "pt_in_trajectory"]].to_csv(args.out_cells_csv)
     adata = adata[adata.obs["pt_in_trajectory"]].copy()
+    n_stage = adata.obs["sample_type"].value_counts()
+    if n_stage.get("embryo", 0) == 0 or n_stage.size < 2:
+        raise ValueError(
+            f"Need embryo cells plus at least one later stage after the root filter; "
+            f"got {n_stage.to_dict()}. Check --filtered includes embryo samples, or "
+            "lower --root_min_frac / --conf_threshold.")
 
     # ── Preprocess ───────────────────────────────────────────────────────────
     sc.pp.filter_genes(adata, min_cells=10)
