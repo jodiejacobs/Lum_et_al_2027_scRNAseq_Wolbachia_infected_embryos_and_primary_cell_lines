@@ -333,3 +333,61 @@ pseudotime_gene_threads: 16
 pseudotime_gene_mem: 128000   # tradeSeq is memory hungry — ~4GB per thread
 pseudotime_gene_time: "8:00:00"
 pseudotime_gene_time_partition: "medium"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Embryo -> primary cells -> immortalized cell line pseudotime
+# (snakemake_scripts/pseudotime/, rules pseudotime_*). Adapted from the
+# Jacobs et al. 2026 SCEPTIC + tradeSeq workflow. Needs sceptic + xgboost
+# (python) and tradeSeq/SingleCellExperiment/BiocParallel/patchwork (R)
+# in scanpy_env, as in 2026.
+# ─────────────────────────────────────────────────────────────────────────────
+# condition -> lineage (matched embryo -> primary cells -> cell line stocks)
+pseudotime_lineages:
+  JupiterGFP-wMel-embryos:       Dmel_JupiterGFP
+  wMel_JupiterGFP_primary_cells: Dmel_JupiterGFP
+  JW18wMel:                      Dmel_JupiterGFP
+  ubkhc-wMel-embryos:            Dmel_Ubkhc
+  wMel_Ubkhc_primary_cells:      Dmel_Ubkhc
+  ubkhc:                         Dmel_Ubkhc
+  Dsim-Merrill23-wRi-embryos:    Dsim_Merrill23
+  wRi_Merrill23_primary_cells:   Dsim_Merrill23
+  Dsim-Merrill23:                Dsim_Merrill23
+  Dsim-w-wRi-embryos:            Dsim_w
+  wRi_Dsimw-_primary_cells:      Dsim_w
+  Dsim6B:                        Dsim_w
+  Dsim6B-wMel:                   Dsim_w
+pseudotime_joint_species: ["Dmel", "Dsim"]   # [Dmel-space reference, species mapped via ortholog_map]
+
+# Root filter: embryo cells kept only if their atlas_annotation (confidence
+# >= pseudotime_conf_threshold) makes up >= pseudotime_root_min_frac of that
+# species' primary_cells + cell_culture cells
+pseudotime_conf_threshold: 0.5
+pseudotime_root_min_frac:  0.01
+pseudotime_n_top_genes:    2000
+pseudotime_n_pcs:          30
+pseudotime_n_bins:         20
+pseudotime_harmony_key:    null   # all PIPseq, and replicate IDs aren't shared batches here -> no Harmony
+pseudotime_n_programs:     12     # per-species NMF programs
+pseudotime_threads:        8
+pseudotime_partition:      "medium"
+pseudotime_mem:            128000
+pseudotime_time:           "4:00:00"
+# SCEPTIC uses sceptic_method / sceptic_threads / sceptic_mem / sceptic_time above
+
+# tradeSeq (per species + joint species-as-condition fit)
+tradeseq_cells_per_sample: 1000   # stratified subsample per sample for GAM fitting
+tradeseq_min_frac:         0.05   # genes detected in >= 5% of subsampled cells
+tradeseq_nknots:           6
+tradeseq_threads:          16
+tradeseq_partition:        "medium"
+tradeseq_mem:              128000
+tradeseq_time:             "24:00:00"
+tradeseq_joint_mem:        256000
+tradeseq_joint_time:       "36:00:00"
+
+# Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
+# gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
+# Dmel gene symbols to run offline, or pseudotime_skip_gsea: true.
+pseudotime_gene_set_libraries: ["GO_Biological_Process_2018", "KEGG_2019"]
+pseudotime_gmt:       ""
+pseudotime_skip_gsea: false

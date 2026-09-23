@@ -274,6 +274,9 @@ rule all:
         "results/integrated/figures_atlas/.titer_by_annotation.done",
         # Embryo -> cell line trajectory/identity analysis
         "results/trajectory_analysis/.done",
+        # Embryo -> primary cells -> cell line pseudotime (per species + cross-species)
+        "results/pseudotime/integrated_with_pseudotime.h5ad",
+        "results/pseudotime/compare_species/.done",
         expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
                sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"]))
@@ -866,6 +869,295 @@ rule embryo_to_cellline_trajectory:
         echo "Trajectory analysis complete"
         """
         
+##################################################################
+# Embryo -> primary cells -> immortalized cell line pseudotime
+##################################################################
+# Per host species: its own PCA (native gene IDs, not the atlas embedding),
+# supervised SCEPTIC pseudotime over the three culture stages (embryo = 0,
+# primary_cells = 1, cell_culture = 2; same recipe as Jacobs et al. 2026),
+# DPT/PAGA as an unsupervised check, tradeSeq gene dynamics and NMF
+# programs along pseudotime. Then a cross-species comparison in Dmel
+# ortholog space (gene overlap, GSEA, joint tradeSeq conditionTest with
+# species as condition, NMF program matching). Scripts live in
+# snakemake_scripts/pseudotime/; see each module docstring for details.
+#
+# Caveat: stage is confounded with sequencing run (embryos, primary cells,
+# and cell lines were each sequenced separately), so the stage axis also
+# carries batch.
+
+def _host_species(sample_id):
+    comp = config.get("genome_components", {}).get(get_genome(sample_id))
+    return comp["host"] if comp else None
+
+PT_SAMPLES = {}
+for _s in SAMPLE_IDS:
+    PT_SAMPLES.setdefault(_host_species(_s), []).append(_s)
+# species with at least two culture stages sampled
+PT_SPECIES = sorted(
+    sp for sp, ids in PT_SAMPLES.items()
+    if sp and len({samples_df.loc[i][6] for i in ids}) >= 2
+)
+PT_JOINT = config.get("pseudotime_joint_species", ["Dmel", "Dsim"])
+print(f"Pseudotime species: {PT_SPECIES}")
+
+# condition -> lineage lookup (matched embryo -> primary -> line), written
+# on every parse like condition_sample_type.tsv
+PT_LINEAGES_PATH = "config/pseudotime_lineages.tsv"
+pd.Series(config.get("pseudotime_lineages", {}), name="lineage").rename_axis(
+    "condition").to_csv(PT_LINEAGES_PATH, sep="\t")
+
+def pt_symbiont_gtfs(wildcards):
+    strains = {get_symbiont_strain(s) for s in PT_SAMPLES[wildcards.species]}
+    return [config["wolbachia_genome"][s]["gtf"] for s in sorted(strains)
+            if s in config.get("wolbachia_genome", {})]
+
+wildcard_constraints:
+    species = "|".join(PT_SPECIES) if PT_SPECIES else "NONE"
+
+PT_ACTIVATE = """
+        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        conda activate {SCANPY_ENV}
+"""
+
+rule pseudotime_prepare:
+    input:
+        integrated = rules.integrate.output.integrated,
+        files      = lambda w: expand("results/filtered_h5ad/{s}.h5ad", s=PT_SAMPLES[w.species]),
+        lineages   = PT_LINEAGES_PATH,
+    output:
+        h5ad  = "results/pseudotime/{species}/prepared_{species}.h5ad",
+        cells = "results/pseudotime/{species}/cells_{species}.csv",
+    params:
+        script        = "snakemake_scripts/pseudotime/prepare_species.py",
+        fig_dir       = "results/pseudotime/{species}/figures",
+        host_gtf      = lambda w: config["host_genome"][w.species]["gtf"],
+        symbiont_gtfs = pt_symbiont_gtfs,
+        conf          = config.get("pseudotime_conf_threshold", 0.5),
+        root_min_frac = config.get("pseudotime_root_min_frac", 0.01),
+        n_top_genes   = config.get("pseudotime_n_top_genes", 2000),
+        n_pcs         = config.get("pseudotime_n_pcs", 30),
+        harmony_flag  = (f"--harmony_key {config['pseudotime_harmony_key']}"
+                         if config.get("pseudotime_harmony_key") else ""),
+    log: "logs/pseudotime/prepare_{species}.log"
+    threads: config.get("pseudotime_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("pseudotime_mem", 128000),
+        slurm_time      = config.get("pseudotime_time", "4:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} \
+            --integrated {input.integrated} --filtered {input.files} \
+            --species {wildcards.species} --lineages {input.lineages} \
+            --host_gtf {params.host_gtf} --symbiont_gtfs {params.symbiont_gtfs} \
+            --conf_threshold {params.conf} --root_min_frac {params.root_min_frac} \
+            --n_top_genes {params.n_top_genes} --n_pcs {params.n_pcs} {params.harmony_flag} \
+            --out_h5ad {output.h5ad} --out_cells_csv {output.cells} --fig_dir {params.fig_dir}
+        """
+
+rule pseudotime_sceptic:
+    input:
+        h5ad = rules.pseudotime_prepare.output.h5ad,
+    output:
+        h5ad   = "results/pseudotime/{species}/sceptic_{species}.h5ad",
+        obs    = "results/pseudotime/{species}/sceptic_obs_{species}.csv",
+        counts = "results/pseudotime/{species}/tradeseq_inputs/counts_genesXcells.mtx",
+        genes  = "results/pseudotime/{species}/tradeseq_inputs/genes.tsv",
+        cells  = "results/pseudotime/{species}/tradeseq_inputs/cells.csv",
+    params:
+        script    = "snakemake_scripts/pseudotime/run_sceptic_stages.py",
+        fig_dir   = "results/pseudotime/{species}/figures",
+        ts_dir    = "results/pseudotime/{species}/tradeseq_inputs",
+        method    = config.get("sceptic_method", "xgboost"),
+        n_pcs     = config.get("pseudotime_n_pcs", 30),
+        n_bins    = config.get("pseudotime_n_bins", 20),
+        conf      = config.get("pseudotime_conf_threshold", 0.5),
+        per_samp  = config.get("tradeseq_cells_per_sample", 1000),
+        min_frac  = config.get("tradeseq_min_frac", 0.05),
+        flybase   = config["flybase_annotation"],
+        orthologs = config["ortholog_map"],
+    log: "logs/pseudotime/sceptic_{species}.log"
+    threads: config.get("sceptic_threads", 8)
+    resources:
+        slurm_partition = config.get("sceptic_partition", "medium"),
+        mem_mb          = config.get("sceptic_mem", 64000),
+        slurm_time      = config.get("sceptic_time", "4:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} \
+            --h5ad {input.h5ad} --species {wildcards.species} \
+            --method {params.method} --n_pcs {params.n_pcs} --n_bins {params.n_bins} \
+            --conf_threshold {params.conf} \
+            --tradeseq_cells_per_sample {params.per_samp} --tradeseq_min_frac {params.min_frac} \
+            --flybase_annotation {params.flybase} --ortholog_map {params.orthologs} \
+            --out_h5ad {output.h5ad} --out_obs_csv {output.obs} \
+            --tradeseq_dir {params.ts_dir} --fig_dir {params.fig_dir}
+        """
+
+rule pseudotime_tradeseq:
+    input:
+        counts = rules.pseudotime_sceptic.output.counts,
+        genes  = rules.pseudotime_sceptic.output.genes,
+        cells  = rules.pseudotime_sceptic.output.cells,
+    output:
+        assoc = "results/pseudotime/{species}/tradeseq/tradeseq_association.csv",
+        flag  = touch("results/pseudotime/{species}/tradeseq/.done"),
+    params:
+        script = "snakemake_scripts/pseudotime/tradeseq_species.R",
+        indir  = "results/pseudotime/{species}/tradeseq_inputs",
+        outdir = "results/pseudotime/{species}/tradeseq",
+        nknots = config.get("tradeseq_nknots", 6),
+    log: "logs/pseudotime/tradeseq_{species}.log"
+    threads: config.get("tradeseq_threads", 16)
+    resources:
+        slurm_partition = config.get("tradeseq_partition", "medium"),
+        mem_mb          = config.get("tradeseq_mem", 128000),
+        slurm_time      = config.get("tradeseq_time", "24:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
+            --nknots {params.nknots} --nworkers {threads}
+        """
+
+rule pseudotime_nmf:
+    input:
+        h5ad = rules.pseudotime_sceptic.output.h5ad,
+    output:
+        top  = "results/pseudotime/{species}/nmf/nmf_top_genes_{species}.csv",
+        flag = touch("results/pseudotime/{species}/nmf/.done"),
+    params:
+        script     = "snakemake_scripts/pseudotime/nmf_along_pseudotime.py",
+        out_dir    = "results/pseudotime/{species}/nmf",
+        n_programs = config.get("pseudotime_n_programs", 12),
+        n_bins     = config.get("pseudotime_n_bins", 20),
+        flybase    = config["flybase_annotation"],
+        orthologs  = config["ortholog_map"],
+    log: "logs/pseudotime/nmf_{species}.log"
+    threads: config.get("nmf_threads", 8)
+    resources:
+        slurm_partition = config.get("nmf_partition", "medium"),
+        mem_mb          = config.get("nmf_mem", 64000),
+        slurm_time      = config.get("nmf_time", "4:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} --h5ad {input.h5ad} --species {wildcards.species} \
+            --n_programs {params.n_programs} --n_bins {params.n_bins} \
+            --flybase_annotation {params.flybase} --ortholog_map {params.orthologs} \
+            --out_dir {params.out_dir}
+        """
+
+rule pseudotime_joint_export:
+    input:
+        dmel_h5ad  = f"results/pseudotime/{PT_JOINT[0]}/sceptic_{PT_JOINT[0]}.h5ad",
+        dmel_cells = f"results/pseudotime/{PT_JOINT[0]}/tradeseq_inputs/cells.csv",
+        dsim_h5ad  = f"results/pseudotime/{PT_JOINT[1]}/sceptic_{PT_JOINT[1]}.h5ad",
+        dsim_cells = f"results/pseudotime/{PT_JOINT[1]}/tradeseq_inputs/cells.csv",
+    output:
+        counts = "results/pseudotime/joint/tradeseq_inputs/counts_genesXcells.mtx",
+        genes  = "results/pseudotime/joint/tradeseq_inputs/genes.tsv",
+        cells  = "results/pseudotime/joint/tradeseq_inputs/cells.csv",
+    params:
+        script    = "snakemake_scripts/pseudotime/export_joint_tradeseq.py",
+        out_dir   = "results/pseudotime/joint/tradeseq_inputs",
+        min_frac  = config.get("tradeseq_min_frac", 0.05),
+        flybase   = config["flybase_annotation"],
+        orthologs = config["ortholog_map"],
+    log: "logs/pseudotime/joint_export.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("pseudotime_mem", 128000),
+        slurm_time      = "2:00:00"
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} \
+            --dmel_h5ad {input.dmel_h5ad} --dmel_cells {input.dmel_cells} \
+            --dsim_h5ad {input.dsim_h5ad} --dsim_cells {input.dsim_cells} \
+            --ortholog_map {params.orthologs} --flybase_annotation {params.flybase} \
+            --min_frac {params.min_frac} --out_dir {params.out_dir}
+        """
+
+rule pseudotime_joint_tradeseq:
+    input:
+        counts = rules.pseudotime_joint_export.output.counts,
+        genes  = rules.pseudotime_joint_export.output.genes,
+        cells  = rules.pseudotime_joint_export.output.cells,
+    output:
+        cond  = "results/pseudotime/joint/tradeseq/tradeseq_condition_test.csv",
+        shape = "results/pseudotime/joint/tradeseq/tradeseq_shape_similarity.csv",
+    params:
+        script = "snakemake_scripts/pseudotime/tradeseq_joint.R",
+        indir  = "results/pseudotime/joint/tradeseq_inputs",
+        outdir = "results/pseudotime/joint/tradeseq",
+        nknots = config.get("tradeseq_nknots", 6),
+    log: "logs/pseudotime/tradeseq_joint.log"
+    threads: config.get("tradeseq_threads", 16)
+    resources:
+        slurm_partition = config.get("tradeseq_partition", "medium"),
+        mem_mb          = config.get("tradeseq_joint_mem", 256000),
+        slurm_time      = config.get("tradeseq_joint_time", "36:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
+            --nknots {params.nknots} --nworkers {threads}
+        """
+
+rule pseudotime_compare_species:
+    input:
+        dmel_ts  = f"results/pseudotime/{PT_JOINT[0]}/tradeseq/.done",
+        dsim_ts  = f"results/pseudotime/{PT_JOINT[1]}/tradeseq/.done",
+        dmel_nmf = f"results/pseudotime/{PT_JOINT[0]}/nmf/.done",
+        dsim_nmf = f"results/pseudotime/{PT_JOINT[1]}/nmf/.done",
+        joint    = rules.pseudotime_joint_tradeseq.output.shape,
+    output:
+        flag = touch("results/pseudotime/compare_species/.done"),
+    params:
+        script    = "snakemake_scripts/pseudotime/compare_species.py",
+        out_dir   = "results/pseudotime/compare_species",
+        dmel_dir  = f"results/pseudotime/{PT_JOINT[0]}",
+        dsim_dir  = f"results/pseudotime/{PT_JOINT[1]}",
+        libs      = " ".join(config.get("pseudotime_gene_set_libraries",
+                                        ["GO_Biological_Process_2018"])),
+        gmt_flag  = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+        flybase   = config["flybase_annotation"],
+        orthologs = config["ortholog_map"],
+    log: "logs/pseudotime/compare_species.log"
+    threads: 4
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 32000,
+        slurm_time      = "4:00:00"
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} \
+            --dmel_tradeseq {params.dmel_dir}/tradeseq --dsim_tradeseq {params.dsim_dir}/tradeseq \
+            --joint_tradeseq results/pseudotime/joint/tradeseq \
+            --dmel_nmf {params.dmel_dir}/nmf --dsim_nmf {params.dsim_dir}/nmf \
+            --ortholog_map {params.orthologs} --flybase_annotation {params.flybase} \
+            --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
+            --out_dir {params.out_dir}
+        """
+
+rule pseudotime_merge:
+    input:
+        integrated = rules.integrate.output.integrated,
+        cells      = expand("results/pseudotime/{species}/cells_{species}.csv", species=PT_SPECIES),
+        obs        = expand("results/pseudotime/{species}/sceptic_obs_{species}.csv", species=PT_SPECIES),
+    output:
+        h5ad = "results/pseudotime/integrated_with_pseudotime.h5ad",
+    params:
+        script = "snakemake_scripts/pseudotime/merge_pseudotime.py",
+    log: "logs/pseudotime/merge.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 64000,
+        slurm_time      = "1:00:00"
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        python {params.script} --integrated {input.integrated} \
+            --cells_csv {input.cells} --sceptic_obs_csv {input.obs} --out_h5ad {output.h5ad}
+        """
+
 # Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample
 rule count_16s_reads:
     input:

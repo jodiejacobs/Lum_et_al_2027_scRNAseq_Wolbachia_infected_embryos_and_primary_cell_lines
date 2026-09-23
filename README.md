@@ -46,6 +46,18 @@ The current `rule all` DAG (see `pipeline_rulegraph.svg` / regenerate with `snak
    - **`titer_by_annotation_atlas`** — *Wolbachia* titer/infection-rate stats and plots grouped by the transferred atlas cell-type annotation (not a Leiden cluster, since none is computed on this embedding) → `results/integrated/figures_atlas/`.
    - **`embryo_to_cellline_trajectory`** — exploratory comparison of the cultured primary cell lines against the embryonic tissue they were derived from: composition, diversity, transfer-confidence, pseudobulk correlation, marker-module scoring, cell-cycle shift, *Wolbachia*-effect, species, and cluster-composition analyses → `results/trajectory_analysis/`.
 
+**Pseudotime arm** (`rule pseudotime_*`, `snakemake_scripts/pseudotime/`): embryo → primary cells → immortalized cell line, per host species. Adapted from the SCEPTIC + tradeSeq workflow in [Jacobs et al. 2026](https://github.com/jodiejacobs/Jacobs_et_al_2026_wolbachia-drosophila-scrnaseq).
+
+- **`pseudotime_prepare`** (`prepare_species.py`): pulls each species' host-gene counts from `results/filtered_h5ad/` and its atlas labels from `integrated.h5ad`, then fits a species-specific PCA. It doesn't use the atlas embedding because that embedding isn't fit to capture culture adaptation. The step also adds `lineage` (from `pseudotime_lineages` in `config.yaml`) and `stage_numeric` (embryo 0, primary_cells 1, cell_culture 2). Embryo cells are kept only if their atlas cell type makes up at least 1% of that species' cultured cells. Finally it runs UMAP, leiden, a diffusion map, DPT rooted in embryo cells, and PAGA (grouped by condition and by leiden) as an unsupervised check.
+- **`pseudotime_sceptic`** (`run_sceptic_stages.py`): supervised SCEPTIC (xgboost) on the three stage labels. Pseudotime runs from 0 to 2 in both species. Readouts are the confusion matrix, SCEPTIC vs DPT, *Wolbachia* titer vs pseudotime, and atlas identity/confidence along pseudotime. The step also exports a stratified subsample (1,000 cells per sample) for tradeSeq.
+- **`pseudotime_tradeseq`** (`tradeseq_species.R`): associationTest, startVsEndTest, and stage-transition tests (embryo→primary, primary→cell line).
+- **`pseudotime_nmf`** (`nmf_along_pseudotime.py`): per-species NMF programs and their usage along pseudotime.
+- **`pseudotime_joint_export`** / **`pseudotime_joint_tradeseq`** (`export_joint_tradeseq.py`, `tradeseq_joint.R`): one tradeSeq fit on 1:1 Dsim→Dmel orthologs with species as the condition. Outputs are conditionTest results plus a shape-only similarity (Pearson r between the two species' smoothers).
+- **`pseudotime_compare_species`** (`compare_species.py`): shared vs species-specific dynamic genes, logFC concordance per transition, GSEA NES per species, joint gene classes, and NMF program matching (Hungarian matching on Jaccard of top genes).
+- **`pseudotime_merge`** (`merge_pseudotime.py`): `results/pseudotime/integrated_with_pseudotime.h5ad`, which is `integrated.h5ad` plus the `species`, `lineage`, `stage_numeric`, `pt_in_trajectory`, `sceptic_pseudotime`, `sceptic_pred_stage`, `sceptic_prob_*`, and `dpt_pseudotime` columns in `.obs`.
+
+Requires `sceptic` + `xgboost` (Python) and `tradeSeq`, `SingleCellExperiment`, `BiocParallel`, `patchwork` (and optionally `ggrepel`) (R) in `scanpy_env`, the same setup as Jacobs et al. 2026. Stage is confounded with sequencing run, so treat the stage axis as stage + batch.
+
 **16S read-alignment arm** — independent of the h5ad arm above, run directly from raw FASTQs:
 
 5. **`bwa_index_symbiont_genome`** — one shared BWA index per *Wolbachia* strain genome.
@@ -68,6 +80,7 @@ snakemake_scripts/
   alignment/                 # offline reference-build scripts (host+symbiont kallisto|bustools indices)
   filtering/                 # QC filtering + titer calculation
   analysis/                  # cell cycle, condition-combine, cell-line<->embryo mapping, trajectory, NMF programs
+  pseudotime/                # embryo -> primary -> cell line pseudotime (SCEPTIC, DPT/PAGA, tradeSeq, NMF, species comparison)
   method_comparison/          # atlas label transfer, atlas-projection integration, titer-by-annotation, cluster/pathway, pseudotime
   reference/                  # ortholog-map (reciprocal-best-hit) build scripts, rRNA gene-list finders
   plotting/, rRNA_analysis/   # QC and 16S/coverage plotting helpers
@@ -82,5 +95,6 @@ results/                    # pipeline outputs (see below)
 - `results/embryo_annotated/`, `results/celllines_mapped_to_embryo/` — standalone atlas label-transfer outputs (see above)
 - `results/integrated/integrated.h5ad` — atlas-projected integration of all samples; `figures/` and `figures_atlas/` hold its QC and titer-by-annotation plots
 - `results/trajectory_analysis/` — embryo→cell-line comparison plots and their matching CSVs
+- `results/pseudotime/{Dmel,Dsim}/` — per-species prepared/SCEPTIC h5ad, `figures/`, `tradeseq/`, `nmf/`; `results/pseudotime/joint/` — cross-species tradeSeq; `results/pseudotime/compare_species/` — species comparison tables and plots; `results/pseudotime/integrated_with_pseudotime.h5ad` — merged object
 - `results/rRNA_analysis/read_counts/` — per-sample 16S vs. total/mapped read counts
 - `results/Figures/` — manuscript figure sources
