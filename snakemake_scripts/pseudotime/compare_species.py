@@ -46,7 +46,7 @@ def read_ts(d, name, d2m=None):
         return None
     df = pd.read_csv(path)
     if d2m is not None:
-        df["gene"] = df["gene"].map(d2m)
+        df["gene"] = df["gene"].map(lambda g: d2m.get(g, g))
         df = df.dropna(subset=["gene"])
     return df.set_index("gene")
 
@@ -224,7 +224,7 @@ def joint_summary(joint_dir, classes, out, shape_thr):
 def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
     tm = pd.read_csv(os.path.join(nmf_mel, "nmf_top_genes_Dmel.csv"))
     ts = pd.read_csv(os.path.join(nmf_sim, "nmf_top_genes_Dsim.csv"))
-    ts["gene"] = ts["gene"].map(d2m)
+    ts["gene"] = ts["gene"].map(lambda g: d2m.get(g, g))
     tm, ts = tm[tm["rank"] <= n_top], ts[ts["rank"] <= n_top].dropna(subset=["gene"])
     pm = {p: set(d.gene) for p, d in tm.groupby("program")}
     ps = {p: set(d.gene) for p, d in ts.groupby("program")}

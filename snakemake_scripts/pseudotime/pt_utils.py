@@ -34,4 +34,19 @@ def load_gene_labels(flybase_annotation, ortholog_map, species):
     fb = load_flybase_symbols(flybase_annotation)
     if species == "Dmel" or not ortholog_map:
         return fb
-    return {d: fb.get(m, m) for d, m in load_orthologs(ortholog_map).items()}
+    # works whether Dsim genes are native IDs or already remapped to FBgn
+    return {**fb, **{d: fb.get(m, m) for d, m in load_orthologs(ortholog_map).items()}}
+
+
+def remap_to_dmel(adata, to_dmel, label=""):
+    """Rename var_names to their 1:1 Dmel FBgn ortholog and drop genes without
+    one. Same logic as remap_dsim_to_dmel() in
+    method_comparison/annotate_with_flysta3d.py (used by rule integrate), so
+    Dsim genes are annotated the same way here as in integrated.h5ad."""
+    mapped = adata.var_names.map(to_dmel)
+    keep = mapped.notna()
+    print(f"  [{label}] ortholog remap: {int(keep.sum())}/{adata.n_vars} genes have a "
+          f"1:1 Dmel ortholog (kept)")
+    adata = adata[:, keep].copy()
+    adata.var_names = mapped[keep].astype(str).values
+    return adata

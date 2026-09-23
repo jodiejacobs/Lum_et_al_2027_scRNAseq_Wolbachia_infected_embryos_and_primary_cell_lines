@@ -936,7 +936,12 @@ rule pseudotime_prepare:
     params:
         script        = "snakemake_scripts/pseudotime/prepare_species.py",
         fig_dir       = "results/pseudotime/{species}/figures",
-        host_gtf      = lambda w: config["host_genome"][w.species]["gtf"],
+        # species in pseudotime_ortholog_species are remapped to 1:1 Dmel
+        # orthologs, so they're filtered against the Dmel GTF
+        host_gtf      = lambda w: config["host_genome"][
+            "Dmel" if w.species in config.get("pseudotime_ortholog_species", []) else w.species]["gtf"],
+        ortholog_flag = lambda w: (f"--ortholog_map {config['ortholog_map']}"
+            if w.species in config.get("pseudotime_ortholog_species", []) else ""),
         symbiont_gtfs = pt_symbiont_gtfs,
         conf          = config.get("pseudotime_conf_threshold", 0.5),
         root_min_frac = config.get("pseudotime_root_min_frac", 0.01),
@@ -955,7 +960,7 @@ rule pseudotime_prepare:
         python {params.script} \
             --integrated {input.integrated} --filtered {input.files} \
             --species {wildcards.species} --lineages {input.lineages} \
-            --host_gtf {params.host_gtf} --symbiont_gtfs {params.symbiont_gtfs} \
+            --host_gtf {params.host_gtf} {params.ortholog_flag} --symbiont_gtfs {params.symbiont_gtfs} \
             --conf_threshold {params.conf} --root_min_frac {params.root_min_frac} \
             --n_top_genes {params.n_top_genes} --n_pcs {params.n_pcs} {params.harmony_flag} \
             --out_h5ad {output.h5ad} --out_cells_csv {output.cells} --fig_dir {params.fig_dir}

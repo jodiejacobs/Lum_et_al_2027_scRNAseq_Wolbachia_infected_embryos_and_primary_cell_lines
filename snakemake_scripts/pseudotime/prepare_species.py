@@ -11,14 +11,17 @@ integrated.h5ad's X_pca_atlas / X_umap_atlas come from a frozen projection
 onto the Flysta3D-v2 atlas. That embedding is fit on embryonic developmental
 biology and is not built to resolve culture adaptation, which is the axis this
 analysis is after. So each species gets its own PCA fit on its own cells,
-using native host gene IDs (Dsim keeps its NCBI IDs, so no genes are lost to
-ortholog remapping). integrated.h5ad supplies only per-cell metadata: the cell
+using Dmel FlyBase gene IDs. Species passed --ortholog_map (Dsim) are remapped
+to 1:1 RBH Dmel orthologs first, then filtered against the Dmel GTF, so the
+annotation matches integrated.h5ad and Dmel. integrated.h5ad supplies only
+per-cell metadata: the cell
 whitelist, atlas labels + confidences, sample_type, titer.
 
 Steps
 -----
-  1. Load raw host-gene counts (adata.raw) from each filtered_h5ad sample of
-     this species; drop Wolbachia + 16S features.
+  1. Load raw counts (adata.raw) from each filtered_h5ad sample of this
+     species; optionally remap to 1:1 Dmel orthologs; keep host genes only
+     (drops Wolbachia + 16S features).
   2. Keep cells present in integrated.h5ad and copy its obs columns across.
   3. Add species / lineage / stage_numeric (embryo=0, primary_cells=1,
      cell_culture=2).
@@ -56,7 +59,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pt_utils import savefig as _savefig
+from pt_utils import savefig as _savefig, load_orthologs, remap_to_dmel
 
 STAGE_ORDER = ["embryo", "primary_cells", "cell_culture"]
 STAGE_NUM = {s: i for i, s in enumerate(STAGE_ORDER)}
@@ -98,7 +101,7 @@ def host_gene_mask(var_names, host_ids, symbiont_ids):
     return np.asarray(~(v.isin(symbiont_ids) | v.str.startswith("16S_")))
 
 
-def load_species_counts(paths, whitelist, host_ids, symbiont_ids):
+def load_species_counts(paths, whitelist, host_ids, symbiont_ids, to_dmel=None):
     adatas = []
     for p in paths:
         base = os.path.splitext(os.path.basename(p))[0]
@@ -110,6 +113,8 @@ def load_species_counts(paths, whitelist, host_ids, symbiont_ids):
         X = X.tocsr() if sp.issparse(X) else sp.csr_matrix(X)
         b = ad.AnnData(X=X.astype(np.float32), var=pd.DataFrame(index=a.raw.var_names))
         b.obs_names = [f"{base}__{bc}" for bc in a.obs_names]
+        if to_dmel:
+            b = remap_to_dmel(b, to_dmel, label=base)
         b = b[:, host_gene_mask(b.var_names, host_ids, symbiont_ids)].copy()
         keep = b.obs_names.isin(whitelist)
         print(f"  {keep.sum()}/{b.n_obs} cells in integrated.h5ad; {b.n_vars} host genes")
@@ -204,7 +209,10 @@ def main():
     p.add_argument("--filtered", required=True, nargs="+")
     p.add_argument("--species", required=True)
     p.add_argument("--lineages", required=True, help="TSV: condition<TAB>lineage")
-    p.add_argument("--host_gtf", default=None)
+    p.add_argument("--host_gtf", default=None,
+                   help="GTF of the gene space used (Dmel GTF when --ortholog_map is set)")
+    p.add_argument("--ortholog_map", default=None,
+                   help="RBH table (Dsim, Dmel columns); remaps this species to Dmel FBgn")
     p.add_argument("--symbiont_gtfs", nargs="*", default=[])
     p.add_argument("--root_label_col", default="atlas_annotation")
     p.add_argument("--conf_threshold", type=float, default=0.5)
@@ -228,9 +236,17 @@ def main():
     integ.file.close()
 
     host_ids = gtf_gene_ids(args.host_gtf) if args.host_gtf else set()
-    sym_ids = set().union(*[gtf_gene_ids(g) for g in args.symbiont_gtfs]) if args.symbiont_gtfs else set()
+    # symbiont GTFs are only used as a fallback (host GTF match < 50%), so a
+    # missing one is a warning, not an error
+    sym_ids = set()
+    for g in args.symbiont_gtfs:
+        if os.path.exists(g):
+            sym_ids |= gtf_gene_ids(g)
+        else:
+            print(f"  WARNING: symbiont GTF not found, skipping: {g}")
 
-    adata = load_species_counts(args.filtered, set(iobs.index), host_ids, sym_ids)
+    to_dmel = load_orthologs(args.ortholog_map) if args.ortholog_map else None
+    adata = load_species_counts(args.filtered, set(iobs.index), host_ids, sym_ids, to_dmel)
     adata.obs = iobs.loc[adata.obs_names].copy()
 
     lin = pd.read_csv(args.lineages, sep="\t", index_col=0).iloc[:, 0].to_dict()

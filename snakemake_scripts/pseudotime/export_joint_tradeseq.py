@@ -32,9 +32,9 @@ def subset_counts(h5ad, cells_csv, species, gene_map=None):
     b = ad.AnnData(X=sp.csr_matrix(a.layers["counts"]), obs=cells.copy(),
                    var=pd.DataFrame(index=a.var_names))
     if gene_map is not None:
-        keep = b.var_names.isin(list(gene_map))
-        b = b[:, keep].copy()
-        b.var_names = [gene_map[g] for g in b.var_names]
+        # native Dsim IDs are mapped; genes already in Dmel FBgn space pass through
+        b.var_names = [gene_map.get(g, g) for g in b.var_names]
+        b = b[:, b.var_names.isin(set(gene_map.values()))].copy()
     b.obs["species"] = species
     print(f"  {species}: {b.n_obs} cells x {b.n_vars} genes (Dmel ID space)")
     return b
