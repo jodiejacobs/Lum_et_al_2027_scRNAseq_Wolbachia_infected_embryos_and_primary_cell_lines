@@ -359,7 +359,11 @@ pseudotime_lineages:
 # species remapped to 1:1 Dmel orthologs (ortholog_map) before PCA, so all
 # species share the Dmel FlyBase annotation, as in integrated.h5ad
 pseudotime_ortholog_species: ["Dsim"]
-pseudotime_joint_species: ["Dmel", "Dsim"]   # [Dmel-space reference, species mapped via ortholog_map]
+# Each lineage above is its own trajectory. Pairwise comparisons default to
+# all within-species + all cross-species lineage pairs (6 here); set an
+# explicit list of [A, B] pairs to override, e.g.
+#   pseudotime_comparisons: [["Dmel_Ubkhc", "Dsim_Merrill23"]]
+pseudotime_comparisons: []
 
 # Root filter: embryo cells kept only if their atlas_annotation (confidence
 # >= pseudotime_conf_threshold) makes up >= pseudotime_root_min_frac of that
@@ -377,7 +381,7 @@ pseudotime_mem:            128000
 pseudotime_time:           "4:00:00"
 # SCEPTIC uses sceptic_method / sceptic_threads / sceptic_mem / sceptic_time above
 
-# tradeSeq (per species + joint species-as-condition fit)
+# tradeSeq (per trajectory + joint trajectory-as-condition fit per pair)
 tradeseq_cells_per_sample: 1000   # stratified subsample per sample for GAM fitting
 tradeseq_min_frac:         0.05   # genes detected in >= 5% of subsampled cells
 tradeseq_nknots:           6

@@ -2,20 +2,22 @@
 """
 compare_species.py
 ==================
-Step 6 (rule pseudotime_compare_species). How similar is immortalization
-in D. melanogaster and D. simulans? Everything runs in Dmel gene space
-(Dsim genes mapped through 1:1 RBH orthologs).
+Step 6 (rule pseudotime_compare). Compares two trajectories A and B
+(--name_a / --name_b): two lineages of one species, or one D. melanogaster
+and one D. simulans lineage. Everything runs in Dmel gene space (Dsim genes
+are already remapped to 1:1 RBH orthologs in prepare_species.py; native
+Dsim IDs are still mapped through --ortholog_map if present).
 
-  1. Ortholog-level gene overlap: pseudotime-associated genes (per-species
+  1. Ortholog-level gene overlap: pseudotime-associated genes (per-trajectory
      tradeSeq associationTest) shared vs species-specific (Fisher test over
-     the universe of 1:1 orthologs tested in both species), Wald statistic
+     the universe of genes tested in both), Wald statistic
      rank correlation, and logFC direction concordance for each stage
      transition (embryo -> primary, primary -> cell line).
-  2. Shared GO/pathway dynamics: preranked GSEA per species per transition
-     (rank = sign(logFC) * waldStat), then Dmel NES vs Dsim NES.
+  2. Shared GO/pathway dynamics: preranked GSEA per trajectory per transition
+     (rank = sign(logFC) * waldStat), then A NES vs B NES.
   3. Joint tradeSeq: conditionTest + shape similarity summarised into gene
      classes (conserved dynamics / diverged shape / level offset only).
-  4. NMF programs: Jaccard overlap of top genes between Dmel and Dsim
+  4. NMF programs: Jaccard overlap of top genes between A and B
      programs, Hungarian matching, and usage-along-pseudotime curves for
      matched pairs.
 """
@@ -37,6 +39,7 @@ from pt_utils import savefig, load_orthologs, load_flybase_symbols
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 TRANSITIONS = ["embryo_to_primary", "primary_to_cellline"]
+A, B = "Dmel", "Dsim"   # trajectory names; set from --name_a / --name_b
 
 
 def read_ts(d, name, d2m=None):
@@ -68,31 +71,31 @@ def gene_overlap(mel, sim, sym, out, alpha):
              [len(s_sig - m_sig), len(universe) - len(m_sig | s_sig)]]
     odds, p = fisher_exact(table, alternative="greater")
     rho, rp = spearmanr(mel.loc[universe, "waldStat"], sim.loc[universe, "waldStat"])
-    summary = dict(universe=len(universe), dmel_sig=len(m_sig), dsim_sig=len(s_sig),
-                   shared_sig=len(both), jaccard=len(both) / max(1, len(m_sig | s_sig)),
+    summary = {"universe": len(universe), f"{A}_sig": len(m_sig), f"{B}_sig": len(s_sig)}
+    summary.update(shared_sig=len(both), jaccard=len(both) / max(1, len(m_sig | s_sig)),
                    fisher_odds=odds, fisher_p=p, waldStat_spearman=rho, waldStat_p=rp)
     print("  associationTest overlap:", summary)
 
     cls = pd.DataFrame(index=universe)
     cls["symbol"] = [sym.get(g, g) for g in universe]
-    cls["dmel_waldStat"] = mel.loc[universe, "waldStat"]
-    cls["dsim_waldStat"] = sim.loc[universe, "waldStat"]
-    cls["dmel_padj"] = mel.loc[universe, "padj"]
-    cls["dsim_padj"] = sim.loc[universe, "padj"]
+    cls[f"{A}_waldStat"] = mel.loc[universe, "waldStat"]
+    cls[f"{B}_waldStat"] = sim.loc[universe, "waldStat"]
+    cls[f"{A}_padj"] = mel.loc[universe, "padj"]
+    cls[f"{B}_padj"] = sim.loc[universe, "padj"]
     cls["class"] = np.select(
         [cls.index.isin(both), cls.index.isin(m_sig), cls.index.isin(s_sig)],
-        ["shared_dynamic", "dmel_only", "dsim_only"], "not_dynamic")
-    cls.sort_values(["class", "dmel_waldStat"], ascending=[True, False]).to_csv(
+        ["shared_dynamic", f"{A}_only", f"{B}_only"], "not_dynamic")
+    cls.sort_values(["class", f"{A}_waldStat"], ascending=[True, False]).to_csv(
         os.path.join(out, "association_gene_classes.csv"))
 
     fig, ax = plt.subplots(figsize=(5.5, 5))
-    pal = {"shared_dynamic": "#8e44ad", "dmel_only": "#2980b9",
-           "dsim_only": "#c0392b", "not_dynamic": "#d0d0d0"}
-    for c in ["not_dynamic", "dmel_only", "dsim_only", "shared_dynamic"]:
+    pal = {"shared_dynamic": "#8e44ad", f"{A}_only": "#2980b9",
+           f"{B}_only": "#c0392b", "not_dynamic": "#d0d0d0"}
+    for c in ["not_dynamic", f"{A}_only", f"{B}_only", "shared_dynamic"]:
         d = cls[cls["class"] == c]
-        ax.scatter(np.log10(d["dmel_waldStat"] + 1), np.log10(d["dsim_waldStat"] + 1),
+        ax.scatter(np.log10(d[f"{A}_waldStat"] + 1), np.log10(d[f"{B}_waldStat"] + 1),
                    s=4, alpha=0.6, c=pal[c], label=f"{c} ({len(d)})")
-    ax.set_xlabel("Dmel log10(Wald + 1)"); ax.set_ylabel("Dsim log10(Wald + 1)")
+    ax.set_xlabel(f"{A} log10(Wald + 1)"); ax.set_ylabel(f"{B} log10(Wald + 1)")
     ax.set_title(f"associationTest, 1:1 orthologs (rho = {rho:.2f})")
     ax.legend(fontsize=7, markerscale=3)
     savefig(fig, os.path.join(out, "association_overlap_scatter.pdf"))
@@ -103,29 +106,29 @@ def transition_concordance(mel, sim, sym, name, out, alpha):
     u = mel.index.intersection(sim.index)
     lm, ls = lfc_col(mel), lfc_col(sim)
     df = pd.DataFrame({"symbol": [sym.get(g, g) for g in u],
-                       "dmel_logFC": mel.loc[u, lm], "dsim_logFC": sim.loc[u, ls],
-                       "dmel_padj": mel.loc[u, "padj"], "dsim_padj": sim.loc[u, "padj"]},
+                       f"{A}_logFC": mel.loc[u, lm], f"{B}_logFC": sim.loc[u, ls],
+                       f"{A}_padj": mel.loc[u, "padj"], f"{B}_padj": sim.loc[u, "padj"]},
                       index=u)
 
     def call(lfc, padj):
         return np.where(padj >= alpha, "ns", np.where(lfc > 0, "up", "down"))
-    df["dmel_call"] = call(df["dmel_logFC"], df["dmel_padj"])
-    df["dsim_call"] = call(df["dsim_logFC"], df["dsim_padj"])
+    df[f"{A}_call"] = call(df[f"{A}_logFC"], df[f"{A}_padj"])
+    df[f"{B}_call"] = call(df[f"{B}_logFC"], df[f"{B}_padj"])
     df.to_csv(os.path.join(out, f"transition_{name}_concordance.csv"))
-    ct = pd.crosstab(df["dmel_call"], df["dsim_call"])
+    ct = pd.crosstab(df[f"{A}_call"], df[f"{B}_call"])
     ct.to_csv(os.path.join(out, f"transition_{name}_crosstab.csv"))
-    both = df[(df.dmel_call != "ns") & (df.dsim_call != "ns")]
-    conc = (both.dmel_call == both.dsim_call).mean() if len(both) else np.nan
-    rho = spearmanr(df["dmel_logFC"], df["dsim_logFC"])[0]
+    both = df[(df[f"{A}_call"] != "ns") & (df[f"{B}_call"] != "ns")]
+    conc = (both[f"{A}_call"] == both[f"{B}_call"]).mean() if len(both) else np.nan
+    rho = spearmanr(df[f"{A}_logFC"], df[f"{B}_logFC"])[0]
 
     fig, ax = plt.subplots(figsize=(5.5, 5))
-    sig_both = (df.dmel_call != "ns") & (df.dsim_call != "ns")
-    ax.scatter(df.loc[~sig_both, "dmel_logFC"], df.loc[~sig_both, "dsim_logFC"],
+    sig_both = (df[f"{A}_call"] != "ns") & (df[f"{B}_call"] != "ns")
+    ax.scatter(df.loc[~sig_both, f"{A}_logFC"], df.loc[~sig_both, f"{B}_logFC"],
                s=3, c="#d0d0d0", alpha=0.5)
-    ax.scatter(df.loc[sig_both, "dmel_logFC"], df.loc[sig_both, "dsim_logFC"],
+    ax.scatter(df.loc[sig_both, f"{A}_logFC"], df.loc[sig_both, f"{B}_logFC"],
                s=5, c="#8e44ad", alpha=0.7, label=f"sig in both ({sig_both.sum()})")
     ax.axhline(0, c="grey", lw=0.5); ax.axvline(0, c="grey", lw=0.5)
-    ax.set_xlabel("Dmel logFC"); ax.set_ylabel("Dsim logFC"); ax.legend(fontsize=7)
+    ax.set_xlabel(f"{A} logFC"); ax.set_ylabel(f"{B} logFC"); ax.legend(fontsize=7)
     ax.set_title(f"{name.replace('_', ' ')}: rho = {rho:.2f}, "
                  f"direction concordance = {conc:.0%}")
     savefig(fig, os.path.join(out, f"transition_{name}_logFC_scatter.pdf"))
@@ -153,7 +156,7 @@ def load_gene_sets(gmt, libs, organism):
 def gsea(mel, sim, sym, gene_sets, out, name, permutations):
     import gseapy as gp
     res = {}
-    for sp_, df in [("Dmel", mel), ("Dsim", sim)]:
+    for sp_, df in [(f"{A}", mel), (f"{B}", sim)]:
         rnk = (np.sign(df[lfc_col(df)]) * df["waldStat"]).rename(index=lambda g: sym.get(g, g))
         rnk = rnk[~rnk.index.duplicated()].dropna().sort_values(ascending=False)
         for lib, gs in gene_sets.items():
@@ -170,27 +173,27 @@ def gsea(mel, sim, sym, gene_sets, out, name, permutations):
         d = d.rename(columns={"NES": f"{sp_}_NES", "FDR q-val": f"{sp_}_FDR",
                               "Lead_genes": f"{sp_}_lead_genes"})
         merged = d if merged is None else merged.merge(d, on=["library", "Term"], how="outer")
-    for c in ["Dmel_NES", "Dsim_NES", "Dmel_FDR", "Dsim_FDR"]:
+    for c in [f"{A}_NES", f"{B}_NES", f"{A}_FDR", f"{B}_FDR"]:
         merged[c] = pd.to_numeric(merged[c], errors="coerce")
-    sig = (merged["Dmel_FDR"] < 0.25) | (merged["Dsim_FDR"] < 0.25)
+    sig = (merged[f"{A}_FDR"] < 0.25) | (merged[f"{B}_FDR"] < 0.25)
     merged["pattern"] = np.select(
-        [(merged["Dmel_FDR"] < 0.25) & (merged["Dsim_FDR"] < 0.25) &
-         (np.sign(merged["Dmel_NES"]) == np.sign(merged["Dsim_NES"])),
-         (merged["Dmel_FDR"] < 0.25) & (merged["Dsim_FDR"] < 0.25),
-         merged["Dmel_FDR"] < 0.25, merged["Dsim_FDR"] < 0.25],
-        ["shared_same_direction", "shared_opposite_direction", "dmel_only", "dsim_only"], "ns")
-    merged.sort_values("Dmel_NES").to_csv(os.path.join(out, f"gsea_{name}_species.csv"),
+        [(merged[f"{A}_FDR"] < 0.25) & (merged[f"{B}_FDR"] < 0.25) &
+         (np.sign(merged[f"{A}_NES"]) == np.sign(merged[f"{B}_NES"])),
+         (merged[f"{A}_FDR"] < 0.25) & (merged[f"{B}_FDR"] < 0.25),
+         merged[f"{A}_FDR"] < 0.25, merged[f"{B}_FDR"] < 0.25],
+        ["shared_same_direction", "shared_opposite_direction", f"{A}_only", f"{B}_only"], "ns")
+    merged.sort_values(f"{A}_NES").to_csv(os.path.join(out, f"gsea_{name}_species.csv"),
                                           index=False)
 
     fig, ax = plt.subplots(figsize=(6, 5.5))
-    ax.scatter(merged.loc[~sig, "Dmel_NES"], merged.loc[~sig, "Dsim_NES"], s=4, c="#d0d0d0")
-    ax.scatter(merged.loc[sig, "Dmel_NES"], merged.loc[sig, "Dsim_NES"], s=8, c="#8e44ad")
+    ax.scatter(merged.loc[~sig, f"{A}_NES"], merged.loc[~sig, f"{B}_NES"], s=4, c="#d0d0d0")
+    ax.scatter(merged.loc[sig, f"{A}_NES"], merged.loc[sig, f"{B}_NES"], s=8, c="#8e44ad")
     lab = merged[merged["pattern"].str.startswith("shared")].copy()
-    lab["m"] = lab[["Dmel_NES", "Dsim_NES"]].abs().min(axis=1)
+    lab["m"] = lab[[f"{A}_NES", f"{B}_NES"]].abs().min(axis=1)
     for _, r in lab.nlargest(12, "m").iterrows():
-        ax.annotate(r["Term"][:45], (r["Dmel_NES"], r["Dsim_NES"]), fontsize=5)
+        ax.annotate(r["Term"][:45], (r[f"{A}_NES"], r[f"{B}_NES"]), fontsize=5)
     ax.axhline(0, c="grey", lw=0.5); ax.axvline(0, c="grey", lw=0.5)
-    ax.set_xlabel("Dmel NES"); ax.set_ylabel("Dsim NES")
+    ax.set_xlabel(f"{A} NES"); ax.set_ylabel(f"{B} NES")
     ax.set_title(f"GSEA, {name.replace('_', ' ')} (purple: FDR < 0.25 in either)")
     savefig(fig, os.path.join(out, f"gsea_{name}_nes_scatter.pdf"))
 
@@ -222,8 +225,8 @@ def joint_summary(joint_dir, classes, out, shape_thr):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
-    tm = pd.read_csv(os.path.join(nmf_mel, "nmf_top_genes_Dmel.csv"))
-    ts = pd.read_csv(os.path.join(nmf_sim, "nmf_top_genes_Dsim.csv"))
+    tm = pd.read_csv(os.path.join(nmf_mel, f"nmf_top_genes_{A}.csv"))
+    ts = pd.read_csv(os.path.join(nmf_sim, f"nmf_top_genes_{B}.csv"))
     ts["gene"] = ts["gene"].map(lambda g: d2m.get(g, g))
     tm, ts = tm[tm["rank"] <= n_top], ts[ts["rank"] <= n_top].dropna(subset=["gene"])
     pm = {p: set(d.gene) for p, d in tm.groupby("program")}
@@ -232,11 +235,11 @@ def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
                      index=list(pm), columns=list(ps))
     J.to_csv(os.path.join(out, "nmf_program_jaccard.csv"))
     r, c = linear_sum_assignment(-J.values)
-    pairs = pd.DataFrame({"dmel_program": J.index[r], "dsim_program": J.columns[c],
+    pairs = pd.DataFrame({f"{A}_program": J.index[r], f"{B}_program": J.columns[c],
                           "jaccard": J.values[r, c]}).sort_values("jaccard", ascending=False)
     pairs["shared_top_genes"] = [
         ", ".join(sorted({sym.get(g, g) for g in pm[a] & ps[b]})[:15])
-        for a, b in zip(pairs.dmel_program, pairs.dsim_program)]
+        for a, b in zip(pairs[f"{A}_program"], pairs[f"{B}_program"])]
     pairs.to_csv(os.path.join(out, "nmf_program_matches.csv"), index=False)
 
     fig, ax = plt.subplots(figsize=(0.5 * J.shape[1] + 3, 0.45 * J.shape[0] + 2))
@@ -244,8 +247,8 @@ def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
     ax.set_title(f"NMF program overlap (Jaccard of top {n_top} genes, 1:1 orthologs)")
     savefig(fig, os.path.join(out, "nmf_program_jaccard.pdf"))
 
-    um = pd.read_csv(os.path.join(nmf_mel, "nmf_usage_along_pt_Dmel.csv"))
-    us = pd.read_csv(os.path.join(nmf_sim, "nmf_usage_along_pt_Dsim.csv"))
+    um = pd.read_csv(os.path.join(nmf_mel, f"nmf_usage_along_pt_{A}.csv"))
+    us = pd.read_csv(os.path.join(nmf_sim, f"nmf_usage_along_pt_{B}.csv"))
     pooled = lambda u: (u.assign(w=u["mean"] * u["count"]).groupby(["program", "bin_center"])
                         [["w", "count"]].sum().assign(mean=lambda d: d.w / d["count"])
                         .reset_index().query("count >= 20"))
@@ -255,9 +258,9 @@ def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
     fig, axes = plt.subplots(int(np.ceil(n / ncol)), ncol, figsize=(4 * ncol, 3 * np.ceil(n / ncol)),
                              squeeze=False)
     for ax, (_, row) in zip(axes.ravel(), pairs.iterrows()):
-        a = um[um.program == row.dmel_program]; b = us[us.program == row.dsim_program]
-        ax.plot(a.bin_center, a["mean"], "o-", ms=3, c="#2980b9", label=row.dmel_program)
-        ax.plot(b.bin_center, b["mean"], "o-", ms=3, c="#c0392b", label=row.dsim_program)
+        a = um[um.program == row[f"{A}_program"]]; b = us[us.program == row[f"{B}_program"]]
+        ax.plot(a.bin_center, a["mean"], "o-", ms=3, c="#2980b9", label=row[f"{A}_program"])
+        ax.plot(b.bin_center, b["mean"], "o-", ms=3, c="#c0392b", label=row[f"{B}_program"])
         ax.axvline(1, ls="--", c="grey", lw=0.5)
         ax.set_title(f"J = {row.jaccard:.2f}", fontsize=8); ax.legend(fontsize=6)
     for ax in axes.ravel()[n:]:
@@ -269,11 +272,11 @@ def nmf_matching(nmf_mel, nmf_sim, d2m, sym, out, n_top):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--dmel_tradeseq", required=True)
-    p.add_argument("--dsim_tradeseq", required=True)
+    p.add_argument("--a_tradeseq", required=True)
+    p.add_argument("--b_tradeseq", required=True)
     p.add_argument("--joint_tradeseq", required=True)
-    p.add_argument("--dmel_nmf", required=True)
-    p.add_argument("--dsim_nmf", required=True)
+    p.add_argument("--a_nmf", required=True)
+    p.add_argument("--b_nmf", required=True)
     p.add_argument("--ortholog_map", required=True)
     p.add_argument("--flybase_annotation", default=None)
     p.add_argument("--gene_set_libraries", nargs="*", default=["GO_Biological_Process_2018"])
@@ -284,8 +287,12 @@ def main():
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--shape_r_threshold", type=float, default=0.7)
     p.add_argument("--nmf_top", type=int, default=50)
+    p.add_argument("--name_a", default="Dmel", help="name of the first trajectory (reference)")
+    p.add_argument("--name_b", default="Dsim", help="name of the second trajectory")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
+    global A, B
+    A, B = args.name_a, args.name_b
     out = args.out_dir
     os.makedirs(out, exist_ok=True)
 
@@ -293,15 +300,15 @@ def main():
     sym = load_flybase_symbols(args.flybase_annotation)
 
     print("\n[1] Ortholog-level gene overlap")
-    mel = read_ts(args.dmel_tradeseq, "tradeseq_association.csv")
-    sim = read_ts(args.dsim_tradeseq, "tradeseq_association.csv", d2m)
+    mel = read_ts(args.a_tradeseq, "tradeseq_association.csv")
+    sim = read_ts(args.b_tradeseq, "tradeseq_association.csv", d2m)
     summary = gene_overlap(mel, sim, sym, out, args.alpha)
     classes = pd.read_csv(os.path.join(out, "association_gene_classes.csv"), index_col=0)
     trans = []
     tr_tables = {}
     for t in TRANSITIONS:
-        m = read_ts(args.dmel_tradeseq, f"tradeseq_{t}.csv")
-        s = read_ts(args.dsim_tradeseq, f"tradeseq_{t}.csv", d2m)
+        m = read_ts(args.a_tradeseq, f"tradeseq_{t}.csv")
+        s = read_ts(args.b_tradeseq, f"tradeseq_{t}.csv", d2m)
         if m is None or s is None:
             continue
         tr_tables[t] = (m, s)
@@ -320,7 +327,7 @@ def main():
     joint_summary(args.joint_tradeseq, classes, out, args.shape_r_threshold)
 
     print("\n[4] NMF program matching")
-    nmf_matching(args.dmel_nmf, args.dsim_nmf, d2m, sym, out, args.nmf_top)
+    nmf_matching(args.a_nmf, args.b_nmf, d2m, sym, out, args.nmf_top)
     print("\nDone ->", out)
 
 

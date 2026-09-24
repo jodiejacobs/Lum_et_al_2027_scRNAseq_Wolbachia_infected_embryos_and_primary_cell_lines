@@ -1,20 +1,22 @@
 #!/usr/bin/env Rscript
 # tradeseq_joint.R
 # ================
-# Step 4b (rule pseudotime_joint_tradeseq). One tradeSeq model across
-# species on 1:1 ortholog counts (Dmel gene space), with species as the
-# condition. Each cell keeps its own species' SCEPTIC pseudotime. Both
-# species share the 0-2 stage scale, so no joint embedding is needed.
+# Step 4b (rule pseudotime_joint_tradeseq). One tradeSeq model for a pair of
+# trajectories A and B (two lineages of one species, or one per species) on
+# 1:1 ortholog counts (Dmel gene space), with the trajectory (cells.csv
+# 'group') as the condition. Each cell keeps its own trajectory's SCEPTIC
+# pseudotime. All trajectories share the 0-2 stage scale, so no joint
+# embedding is needed.
 #
-# conditionTest asks whether a gene's smoother differs between Dmel and Dsim.
-# That covers expression-level offsets as well as shape. Cross-species level
-# offsets can come from annotation or mapping differences, so this script
-# also reports a shape-only measure: the Pearson r between the two species'
-# smoothed curves on the shared pseudotime grid.
+# conditionTest asks whether a gene's smoother differs between A and B.
+# That covers expression-level offsets as well as shape. Level offsets can
+# come from annotation, mapping, or batch differences, so this script also
+# reports a shape-only measure: the Pearson r between the two smoothed
+# curves on the shared pseudotime grid.
 #
 # Usage:
-#   Rscript tradeseq_joint.R --indir results/pseudotime/joint/tradeseq_inputs \
-#       --outdir results/pseudotime/joint/tradeseq --nknots 6 --nworkers 16
+#   Rscript tradeseq_joint.R --indir results/pseudotime/pairs/<A>__vs__<B>/tradeseq_inputs \
+#       --outdir results/pseudotime/pairs/<A>__vs__<B>/tradeseq --nknots 6 --nworkers 16
 #
 # Outputs: tradeseq_joint_sce.rds, tradeseq_condition_test.csv,
 #   tradeseq_joint_association.csv, tradeseq_joint_smooth_tidy.csv.gz,
@@ -53,7 +55,11 @@ cells  <- read.csv(file.path(in_dir, "cells.csv"), row.names = 1, stringsAsFacto
 rownames(counts) <- genes$gene
 colnames(counts) <- rownames(cells)
 label_of <- setNames(genes$label, genes$gene)
-species  <- factor(cells$species, levels = c("Dmel", "Dsim"))
+# trajectory A is whichever group appears first in cells.csv
+grp_levels <- unique(cells$group)
+if (length(grp_levels) != 2) stop("cells.csv must contain exactly 2 groups")
+species  <- factor(cells$group, levels = grp_levels)
+name_a <- grp_levels[1]; name_b <- grp_levels[2]
 cat(sprintf("  %d genes x %d cells\n", nrow(counts), ncol(counts)))
 print(table(species, cells$sample_type))
 
@@ -61,7 +67,7 @@ pt_mat <- matrix(cells$sceptic_pseudotime, ncol = 1,
                  dimnames = list(rownames(cells), "pseudotime"))
 wt_mat <- matrix(1, nrow = nrow(cells), ncol = 1, dimnames = list(rownames(cells), "w1"))
 
-cat(sprintf("\n[2/4] fitGAM with conditions = species (%d knots, %d workers)\n",
+cat(sprintf("\n[2/4] fitGAM with conditions = trajectory (%d knots, %d workers)\n",
             n_knots, n_workers))
 set.seed(42)
 sce <- fitGAM(counts = counts, pseudotime = pt_mat, cellWeights = wt_mat,
@@ -89,7 +95,7 @@ assoc <- tryCatch(
            "tradeseq_joint_association.csv"),
     error = function(e) { cat("  associationTest failed:", conditionMessage(e), "\n"); NULL })
 
-cat("\n[4/4] Shape similarity of species smoothers\n")
+cat("\n[4/4] Shape similarity of the two smoothers\n")
 sm <- predictSmooth(sce, gene = rownames(counts), nPoints = n_points, tidy = TRUE)
 gz <- gzfile(file.path(out_dir, "tradeseq_joint_smooth_tidy.csv.gz"), "w")
 write.csv(sm, gz, row.names = FALSE); close(gz)
@@ -98,14 +104,14 @@ cat("  predictSmooth condition values:", paste(unique(sm$condition), collapse = 
 sm$ly <- log1p(sm$yhat)
 wide  <- split(sm, sm$gene)
 shape <- do.call(rbind, lapply(wide, function(d) {
-    is_mel <- grepl("Dmel", d$condition)
-    is_sim <- grepl("Dsim", d$condition)
+    is_mel <- as.character(d$condition) == name_a
+    is_sim <- as.character(d$condition) == name_b
     a <- d$ly[is_mel][order(d$time[is_mel])]
     b <- d$ly[is_sim][order(d$time[is_sim])]
     r <- if (sd(a) > 0 && sd(b) > 0) cor(a, b) else NA_real_
     data.frame(gene = d$gene[1], shape_r = r,
-               mean_log_ratio_mel_vs_sim = mean(a - b),
-               range_dmel = diff(range(a)), range_dsim = diff(range(b)))
+               mean_log_ratio_a_vs_b = mean(a - b),
+               range_a = diff(range(a)), range_b = diff(range(b)))
 }))
 shape$label <- label_of[shape$gene]
 ct <- cond[, c("gene", "waldStat", "padj", "sig")]
@@ -118,8 +124,8 @@ p <- ggplot(shape, aes(shape_r, fill = condition_sig)) +
     geom_histogram(bins = 50, alpha = 0.8, position = "identity") +
     scale_fill_manual(values = c("FALSE" = "#95a5a6", "TRUE" = "#c0392b"),
                       labels = c("conditionTest ns", "conditionTest padj < 0.05")) +
-    labs(x = "Pearson r, Dmel vs Dsim smoothed curve (log1p)", y = "Genes", fill = NULL,
-         title = "Shape similarity of pseudotime dynamics across species") +
+    labs(x = sprintf("Pearson r, %s vs %s smoothed curve (log1p)", name_a, name_b), y = "Genes", fill = NULL,
+         title = "Shape similarity of pseudotime dynamics") +
     theme_bw(base_size = 11) + theme(legend.position = "top")
 ggsave(file.path(out_dir, "shape_similarity_hist.pdf"), p, width = 7, height = 5)
 

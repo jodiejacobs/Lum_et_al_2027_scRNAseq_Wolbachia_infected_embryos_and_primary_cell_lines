@@ -3,7 +3,8 @@
 prepare_species.py
 ==================
 Step 1 of the embryo -> primary cells -> immortalized cell line pseudotime
-analysis (rule pseudotime_prepare). Run once per host species.
+analysis (rule pseudotime_prepare). Run once per trajectory (one matched
+embryo -> primary cells -> cell line lineage; --group), or per species.
 
 Why a new object instead of integrated.h5ad's embedding
 -------------------------------------------------------
@@ -191,7 +192,13 @@ def plot_overview(adata, fig_dir, species):
 
 
 def run_paga(adata, groups, fig_dir, species):
-    sc.tl.paga(adata, groups=groups)
+    try:
+        sc.tl.paga(adata, groups=groups)
+    except ValueError as e:
+        # igraph fails when no kNN edges connect the groups at all
+        print(f"  WARNING: PAGA by {groups} failed ({e}); groups are disconnected "
+              "in the kNN graph -- skipping")
+        return
     con = adata.uns["paga"]["connectivities"].toarray()
     cats = adata.obs[groups].cat.categories
     pd.DataFrame(con, index=cats, columns=cats).to_csv(
@@ -207,7 +214,9 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--integrated", required=True)
     p.add_argument("--filtered", required=True, nargs="+")
-    p.add_argument("--species", required=True)
+    p.add_argument("--species", required=True, help="host species (Dmel / Dsim)")
+    p.add_argument("--group", default=None,
+                   help="trajectory name used for files/titles (e.g. a lineage); default = species")
     p.add_argument("--lineages", required=True, help="TSV: condition<TAB>lineage")
     p.add_argument("--host_gtf", default=None,
                    help="GTF of the gene space used (Dmel GTF when --ortholog_map is set)")
@@ -230,7 +239,8 @@ def main():
     os.makedirs(args.fig_dir, exist_ok=True)
     os.makedirs(os.path.dirname(args.out_h5ad) or ".", exist_ok=True)
 
-    print(f"=== Pseudotime prep: {args.species} ===")
+    name = args.group or args.species
+    print(f"=== Pseudotime prep: {name} ({args.species}) ===")
     integ = ad.read_h5ad(args.integrated, backed="r")
     iobs = integ.obs[[c for c in OBS_KEEP if c in integ.obs.columns]].copy()
     integ.file.close()
@@ -263,7 +273,7 @@ def main():
 
     in_traj = root_filter(adata.obs, args.root_label_col,
                           f"{args.root_label_col}_confidence", args.conf_threshold,
-                          args.root_min_frac, args.fig_dir, args.species)
+                          args.root_min_frac, args.fig_dir, name)
     adata.obs["pt_in_trajectory"] = in_traj.values
     adata.obs[["species", "lineage", "condition", "sample_type", "stage_numeric",
                "pt_in_trajectory"]].to_csv(args.out_cells_csv)
@@ -311,9 +321,9 @@ def main():
     adata.obs["sample_type"] = adata.obs["sample_type"].cat.reorder_categories(
         [s for s in STAGE_ORDER if s in adata.obs["sample_type"].cat.categories])
 
-    plot_overview(adata, args.fig_dir, args.species)
-    run_paga(adata, "condition", args.fig_dir, args.species)
-    run_paga(adata, "leiden", args.fig_dir, args.species)
+    plot_overview(adata, args.fig_dir, name)
+    run_paga(adata, "condition", args.fig_dir, name)
+    run_paga(adata, "leiden", args.fig_dir, name)
 
     adata.write(args.out_h5ad)
     print(f"\nWrote {args.out_h5ad} ({adata.n_obs} cells x {adata.n_vars} genes)")
