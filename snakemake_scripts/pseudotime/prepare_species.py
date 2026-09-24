@@ -203,9 +203,15 @@ def run_paga(adata, groups, fig_dir, species):
     cats = adata.obs[groups].cat.categories
     pd.DataFrame(con, index=cats, columns=cats).to_csv(
         os.path.join(fig_dir, f"paga_connectivities_{groups}_{species}.csv"))
-    fig, ax = plt.subplots(figsize=(7, 6))
-    sc.pl.paga(adata, threshold=0.05, ax=ax, show=False, fontsize=7,
-               title=f"{species}: PAGA by {groups}")
+    # connectivity heatmap instead of sc.pl.paga's graph drawing, which breaks
+    # with newer scipy sparse arrays (TypeError: sparse array length is ambiguous)
+    n = len(cats)
+    fig, ax = plt.subplots(figsize=(0.5 * n + 3, 0.45 * n + 2.5))
+    sns.heatmap(pd.DataFrame(con, index=cats, columns=cats), cmap="viridis",
+                vmin=0, vmax=1, annot=n <= 12, fmt=".2f", annot_kws={"size": 7},
+                square=True, cbar_kws={"label": "PAGA connectivity"}, ax=ax)
+    ax.set_title(f"{species}: PAGA connectivity by {groups}")
+    plt.xticks(rotation=45, ha="right")
     _savefig(fig, os.path.join(fig_dir, f"paga_{groups}_{species}.pdf"))
 
 
