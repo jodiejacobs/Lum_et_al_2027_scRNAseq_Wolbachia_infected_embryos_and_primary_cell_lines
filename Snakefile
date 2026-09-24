@@ -974,7 +974,11 @@ wildcard_constraints:
     group = "|".join(PT_GROUPS) if PT_GROUPS else "NONE",
     pair  = "|".join(PT_PAIRS) if PT_PAIRS else "NONE"
 
-# conda activation for the pseudotime rules (CONDA_BASE defined at top)
+# conda activation for the pseudotime rules (CONDA_BASE defined at top).
+# Interpreters are also called by absolute path ({SCANPY_ENV}/bin/python):
+# SLURM jobs inherit the submitting shell's PATH, and if a venv is active on
+# top of an already-active scanpy env, `conda activate` is a no-op and bare
+# `python` resolves to the venv's interpreter (no numpy).
 PT_ACTIVATE = """
         set +u
         source {CONDA_BASE}/etc/profile.d/conda.sh
@@ -1017,7 +1021,7 @@ rule pseudotime_prepare:
         runtime         = _hms_to_min(config.get("pseudotime_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} \
+        {SCANPY_ENV}/bin/python {params.script} \
             --integrated {input.integrated} --filtered {input.files} \
             --species {params.species} --group {wildcards.group} --lineages {input.lineages} \
             --host_gtf {params.host_gtf} {params.ortholog_flag} --symbiont_gtfs {params.symbiont_gtfs} \
@@ -1056,7 +1060,7 @@ rule pseudotime_sceptic:
         runtime         = _hms_to_min(config.get("sceptic_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} \
+        {SCANPY_ENV}/bin/python {params.script} \
             --h5ad {input.h5ad} --species {wildcards.group} \
             --method {params.method} --n_pcs {params.n_pcs} --n_bins {params.n_bins} \
             --conf_threshold {params.conf} \
@@ -1088,7 +1092,7 @@ rule pseudotime_tradeseq:
         runtime         = _hms_to_min(config.get("tradeseq_time", "24:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
+        {SCANPY_ENV}/bin/Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
             --nknots {params.nknots} --nworkers {threads}
         """
 
@@ -1114,7 +1118,7 @@ rule pseudotime_nmf:
         runtime         = _hms_to_min(config.get("nmf_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} --h5ad {input.h5ad} --species {wildcards.group} \
+        {SCANPY_ENV}/bin/python {params.script} --h5ad {input.h5ad} --species {wildcards.group} \
             --n_programs {params.n_programs} --n_bins {params.n_bins} \
             --flybase_annotation {params.flybase} --ortholog_map {params.orthologs} \
             --out_dir {params.out_dir}
@@ -1145,7 +1149,7 @@ rule pseudotime_joint_export:
         runtime         = _hms_to_min("2:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} \
+        {SCANPY_ENV}/bin/python {params.script} \
             --a_h5ad {input.a_h5ad} --a_cells {input.a_cells} \
             --b_h5ad {input.b_h5ad} --b_cells {input.b_cells} {params.names} \
             --ortholog_map {params.orthologs} --flybase_annotation {params.flybase} \
@@ -1174,7 +1178,7 @@ rule pseudotime_joint_tradeseq:
         runtime         = _hms_to_min(config.get("tradeseq_joint_time", "36:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
+        {SCANPY_ENV}/bin/Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
             --nknots {params.nknots} --nworkers {threads}
         """
 
@@ -1207,7 +1211,7 @@ rule pseudotime_compare:
         runtime         = _hms_to_min("4:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} \
+        {SCANPY_ENV}/bin/python {params.script} \
             --name_a {params.a} --name_b {params.b} \
             --a_tradeseq results/pseudotime/{params.a}/tradeseq \
             --b_tradeseq results/pseudotime/{params.b}/tradeseq \
@@ -1235,7 +1239,7 @@ rule pseudotime_merge:
         runtime         = _hms_to_min("1:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        python {params.script} --integrated {input.integrated} \
+        {SCANPY_ENV}/bin/python {params.script} --integrated {input.integrated} \
             --cells_csv {input.cells} --sceptic_obs_csv {input.obs} --out_h5ad {output.h5ad}
         """
 
