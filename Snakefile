@@ -283,6 +283,9 @@ rule all:
         "results/pseudotime/integrated_with_pseudotime.h5ad",
         # (function: PT_PAIRS is defined further down, in the pseudotime section)
         lambda w: expand("results/pseudotime/pairs/{pair}/compare/.done", pair=PT_PAIRS),
+        # Discrete pseudobulk DE + concordance with tradeSeq
+        "results/pseudotime/de/.done",
+        "results/pseudotime/de/concordance/.done",
         expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
                sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"]))
@@ -1012,6 +1015,8 @@ rule pseudotime_prepare:
         n_pcs         = config.get("pseudotime_n_pcs", 30),
         harmony_flag  = (f"--harmony_key {config['pseudotime_harmony_key']}"
                          if config.get("pseudotime_harmony_key") else ""),
+        hvg_batch_key = config.get("pseudotime_hvg_batch_key", "source_file"),
+        flybase       = config["flybase_annotation"],
     log: "logs/pseudotime/prepare_{group}.log"
     threads: config.get("pseudotime_threads", 8)
     resources:
@@ -1027,6 +1032,7 @@ rule pseudotime_prepare:
             --host_gtf {params.host_gtf} {params.ortholog_flag} --symbiont_gtfs {params.symbiont_gtfs} \
             --conf_threshold {params.conf} --root_min_frac {params.root_min_frac} \
             --n_top_genes {params.n_top_genes} --n_pcs {params.n_pcs} {params.harmony_flag} \
+            --hvg_batch_key "{params.hvg_batch_key}" --flybase_annotation {params.flybase} \
             --out_h5ad {output.h5ad} --out_cells_csv {output.cells} --fig_dir {params.fig_dir}
         """
 
@@ -1241,6 +1247,67 @@ rule pseudotime_merge:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python {params.script} --integrated {input.integrated} \
             --cells_csv {input.cells} --sceptic_obs_csv {input.obs} --out_h5ad {output.h5ad}
+        """
+
+##################################################################
+# Discrete pseudobulk DE: embryo -> primary cells -> cell line
+##################################################################
+# Counterpart to the pseudotime: one pseudobulk profile per sample (same
+# trajectory cells as prepare_species.py), PyDESeq2 with lineages as
+# replicates. Per species (~lineage + stage), pooled across species, and a
+# species x stage interaction; per-lineage sign consistency and GSEA. Then
+# concordance with the tradeSeq transition tests. See de_stages.py.
+rule pseudotime_de:
+    input:
+        h5ads = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+    output:
+        summary = "results/pseudotime/de/de_summary.csv",
+        flag    = touch("results/pseudotime/de/.done"),
+    params:
+        script    = "snakemake_scripts/pseudotime/de_stages.py",
+        out_dir   = "results/pseudotime/de",
+        min_cells = config.get("de_min_cells", 30),
+        libs      = " ".join(config.get("pseudotime_gene_set_libraries",
+                                        ["GO_Biological_Process_2018"])),
+        gmt_flag  = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+        flybase   = config["flybase_annotation"],
+    log: "logs/pseudotime/de.log"
+    threads: config.get("de_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = config.get("de_time", "4:00:00"),
+        runtime         = _hms_to_min(config.get("de_time", "4:00:00"))
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --flybase_annotation {params.flybase} --min_cells {params.min_cells} \
+            --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
+            --out_dir {params.out_dir}
+        """
+
+rule pseudotime_de_concordance:
+    input:
+        de = rules.pseudotime_de.output.flag,
+        ts = expand("results/pseudotime/{group}/tradeseq/.done", group=PT_GROUPS),
+    output:
+        flag = touch("results/pseudotime/de/concordance/.done"),
+    params:
+        script  = "snakemake_scripts/pseudotime/de_vs_tradeseq.py",
+        groups  = " ".join(PT_GROUPS),
+        species = " ".join(PT_GROUP_SPECIES[g] for g in PT_GROUPS),
+    log: "logs/pseudotime/de_concordance.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 16000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
+            --groups {params.groups} --species {params.species} \
+            --tradeseq_root results/pseudotime --out_dir results/pseudotime/de/concordance
         """
 
 # Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample

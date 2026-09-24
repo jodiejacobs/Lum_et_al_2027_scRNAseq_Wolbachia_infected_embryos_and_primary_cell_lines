@@ -373,6 +373,11 @@ pseudotime_root_min_frac:  0.01
 pseudotime_n_top_genes:    2000
 pseudotime_n_pcs:          30
 pseudotime_n_bins:         20
+# HVGs are picked WITHIN each sample (obs column below), so genes that only
+# separate samples/stages (and their sequencing runs) don't drive the PCA.
+# Ribosomal, mito, heat-shock and dissociation-stress genes are also kept out
+# of the PCA (DEFAULT_EXCLUDE_REGEX in prepare_species.py). "" = pooled HVGs.
+pseudotime_hvg_batch_key:  "source_file"
 pseudotime_harmony_key:    null   # all PIPseq, and replicate IDs aren't shared batches here -> no Harmony
 pseudotime_n_programs:     12     # per-species NMF programs
 pseudotime_threads:        8
@@ -391,6 +396,14 @@ tradeseq_mem:              128000
 tradeseq_time:             "24:00:00"
 tradeseq_joint_mem:        256000
 tradeseq_joint_time:       "36:00:00"
+
+# Pseudobulk DE (rule pseudotime_de, PyDESeq2; needs `pip install pydeseq2`
+# in scanpy_env). Samples with fewer trajectory cells than de_min_cells are
+# dropped. GSEA settings below are shared.
+de_min_cells: 30
+de_threads:   8
+de_mem:       64000
+de_time:      "4:00:00"
 
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
