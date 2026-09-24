@@ -382,7 +382,7 @@ tradeseq_cells_per_sample: 1000   # stratified subsample per sample for GAM fitt
 tradeseq_min_frac:         0.05   # genes detected in >= 5% of subsampled cells
 tradeseq_nknots:           6
 tradeseq_threads:          16
-tradeseq_partition:        "medium"
+tradeseq_partition:        "long"
 tradeseq_mem:              128000
 tradeseq_time:             "24:00:00"
 tradeseq_joint_mem:        256000

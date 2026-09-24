@@ -885,6 +885,13 @@ rule embryo_to_cellline_trajectory:
 # and cell lines were each sequenced separately), so the stage axis also
 # carries batch.
 
+def _hms_to_min(t):
+    """'HH:MM:SS' -> minutes. The slurm executor plugin sets the wall time
+    from the `runtime` resource (minutes), not `slurm_time`, so without this
+    jobs fall back to the default runtime and get killed with TIMEOUT."""
+    h, m, sec = (int(x) for x in str(t).split(":"))
+    return h * 60 + m + (1 if sec else 0)
+
 def _host_species(sample_id):
     comp = config.get("genome_components", {}).get(get_genome(sample_id))
     return comp["host"] if comp else None
@@ -954,7 +961,8 @@ rule pseudotime_prepare:
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
         mem_mb          = config.get("pseudotime_mem", 128000),
-        slurm_time      = config.get("pseudotime_time", "4:00:00")
+        slurm_time      = config.get("pseudotime_time", "4:00:00"),
+        runtime         = _hms_to_min(config.get("pseudotime_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} \
@@ -992,7 +1000,8 @@ rule pseudotime_sceptic:
     resources:
         slurm_partition = config.get("sceptic_partition", "medium"),
         mem_mb          = config.get("sceptic_mem", 64000),
-        slurm_time      = config.get("sceptic_time", "4:00:00")
+        slurm_time      = config.get("sceptic_time", "4:00:00"),
+        runtime         = _hms_to_min(config.get("sceptic_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} \
@@ -1023,7 +1032,8 @@ rule pseudotime_tradeseq:
     resources:
         slurm_partition = config.get("tradeseq_partition", "medium"),
         mem_mb          = config.get("tradeseq_mem", 128000),
-        slurm_time      = config.get("tradeseq_time", "24:00:00")
+        slurm_time      = config.get("tradeseq_time", "24:00:00"),
+        runtime         = _hms_to_min(config.get("tradeseq_time", "24:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
@@ -1048,7 +1058,8 @@ rule pseudotime_nmf:
     resources:
         slurm_partition = config.get("nmf_partition", "medium"),
         mem_mb          = config.get("nmf_mem", 64000),
-        slurm_time      = config.get("nmf_time", "4:00:00")
+        slurm_time      = config.get("nmf_time", "4:00:00"),
+        runtime         = _hms_to_min(config.get("nmf_time", "4:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} --h5ad {input.h5ad} --species {wildcards.species} \
@@ -1077,7 +1088,8 @@ rule pseudotime_joint_export:
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
         mem_mb          = config.get("pseudotime_mem", 128000),
-        slurm_time      = "2:00:00"
+        slurm_time      = "2:00:00",
+        runtime         = _hms_to_min("2:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} \
@@ -1105,7 +1117,8 @@ rule pseudotime_joint_tradeseq:
     resources:
         slurm_partition = config.get("tradeseq_partition", "medium"),
         mem_mb          = config.get("tradeseq_joint_mem", 256000),
-        slurm_time      = config.get("tradeseq_joint_time", "36:00:00")
+        slurm_time      = config.get("tradeseq_joint_time", "36:00:00"),
+        runtime         = _hms_to_min(config.get("tradeseq_joint_time", "36:00:00"))
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         Rscript {params.script} --indir {params.indir} --outdir {params.outdir} \
@@ -1137,7 +1150,8 @@ rule pseudotime_compare_species:
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
         mem_mb          = 32000,
-        slurm_time      = "4:00:00"
+        slurm_time      = "4:00:00",
+        runtime         = _hms_to_min("4:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} \
@@ -1162,7 +1176,8 @@ rule pseudotime_merge:
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
         mem_mb          = 64000,
-        slurm_time      = "1:00:00"
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         python {params.script} --integrated {input.integrated} \
