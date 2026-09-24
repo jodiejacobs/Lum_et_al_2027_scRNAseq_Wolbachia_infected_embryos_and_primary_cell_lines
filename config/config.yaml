@@ -397,6 +397,14 @@ tradeseq_time:             "24:00:00"
 tradeseq_joint_mem:        256000
 tradeseq_joint_time:       "36:00:00"
 
+# Pseudobulk DE (rule pseudotime_de, PyDESeq2; needs `pip install pydeseq2`
+# in scanpy_env). Samples with fewer trajectory cells than de_min_cells are
+# dropped. GSEA settings below are shared.
+de_min_cells: 30
+de_threads:   8
+de_mem:       64000
+de_time:      "4:00:00"
+
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
 # Dmel gene symbols to run offline, or pseudotime_skip_gsea: true.
