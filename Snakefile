@@ -12,6 +12,11 @@ SCANPY_ENV = config["scanpy_env"]
 CYCLUM_ENV = config["cyclum_env"]
 KALLISTO_ENV = config["kallisto_env"]
 SRA_TOOLS_ENV = config["sra_tools_env"]
+# conda.sh is located from the env path itself (miniforge3/envs/scanpy ->
+# miniforge3), since `which conda` is empty in non-interactive SLURM job
+# shells. All envs above live under the same miniforge3 base. set +u around
+# activation because conda's activate scripts reference unset variables.
+CONDA_BASE = os.path.dirname(os.path.dirname(SCANPY_ENV))
 
 
 # Load samples information
@@ -337,8 +342,10 @@ rule map_pipseq:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {KALLISTO_ENV}
+        set -u
 
         kb count \
             -i {input.kallisto_index} \
@@ -389,8 +396,10 @@ rule map_10x:
         echo "Input files: {input.read1}, {input.read2}"
         echo "Output directory: {params.outdir}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {KALLISTO_ENV}
+        set -u
 
         kb count \
             --kallisto /private/home/jomojaco/kallisto/build/src/kallisto \
@@ -433,8 +442,10 @@ rule filter_h5ad:
         echo "Starting filtering for {wildcards.sample_id}"
         echo "Input file: {input.h5ad}"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -469,8 +480,10 @@ rule annotate_cell_cycle: # This needs the cyclum conda environment
         echo "Starting cell cycle annotation for {wildcards.sample_id}"
         echo "Input file: {input.h5ad}"
         
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {CYCLUM_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -503,8 +516,10 @@ rule combine_files_by_condition_platform:
         slurm_time = config["combine_time"]
     shell:
         """
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
         python {params.combine_script} --files {input.input_files} --out_path {output.combined} --fig_dir {params.fig_dir} --sample {params.sample} --batch_key batch --min_cells 3 --min_genes 200
         """
 
@@ -532,8 +547,10 @@ rule bwa_index_symbiont_genome:
     shell:
         """
         exec > {log} 2>&1
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SRA_TOOLS_ENV}
+        set -u
         bwa index {input.fasta}
         """
 
@@ -600,8 +617,10 @@ rule annotate_with_atlas:
         exec > {log} 2>&1
         echo "Starting Flysta3D-v2 atlas label transfer (embryo samples only)"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --atlas {input.atlas} \
@@ -666,8 +685,10 @@ rule map_celllines_to_embryo:
         exec > {log} 2>&1
         echo "Mapping primary cell line samples onto the annotated embryo reference"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --reference {input.reference} \
@@ -745,8 +766,10 @@ rule integrate:
         exec > {log} 2>&1
         echo "Starting atlas-projected integration (all samples)"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --atlas {input.atlas} \
@@ -801,8 +824,10 @@ rule titer_by_annotation_atlas:
         exec > {log} 2>&1
         echo "Starting titer-by-annotation analysis"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --adata {input.h5ad} \
@@ -854,8 +879,10 @@ rule embryo_to_cellline_trajectory:
         exec > {log} 2>&1
         echo "Starting embryo -> cell line trajectory analysis"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SCANPY_ENV}
+        set -u
 
         python {params.script} \
             --input {input.h5ad} \
@@ -947,10 +974,7 @@ wildcard_constraints:
     group = "|".join(PT_GROUPS) if PT_GROUPS else "NONE",
     pair  = "|".join(PT_PAIRS) if PT_PAIRS else "NONE"
 
-# conda.sh is located from the env path itself (miniforge3/envs/scanpy ->
-# miniforge3), since `which conda` is empty in non-interactive SLURM shells.
-# set +u around activation: conda's activate scripts reference unset vars.
-CONDA_BASE = os.path.dirname(os.path.dirname(SCANPY_ENV))
+# conda activation for the pseudotime rules (CONDA_BASE defined at top)
 PT_ACTIVATE = """
         set +u
         source {CONDA_BASE}/etc/profile.d/conda.sh
@@ -1246,8 +1270,10 @@ rule count_16s_reads:
         exec > {log} 2>&1
         echo "Counting 16S vs total reads for {wildcards.sample_id} (region: {params.region})"
 
-        source $(dirname $(dirname $(which conda)))/etc/profile.d/conda.sh
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
         conda activate {SRA_TOOLS_ENV}
+        set -u
 
         mkdir -p results/rRNA_analysis/read_counts/{wildcards.sample_id}
 
