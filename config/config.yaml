@@ -341,6 +341,15 @@ pseudotime_gene_time_partition: "medium"
 # (python) and tradeSeq/SingleCellExperiment/BiocParallel/patchwork (R)
 # in scanpy_env, as in 2026.
 # ─────────────────────────────────────────────────────────────────────────────
+# Continuous-trajectory steps (per-lineage tradeSeq, joint tradeSeq, NMF
+# along pseudotime, pairwise comparisons, DE-vs-tradeSeq concordance). Off by
+# default: the kNN stage-mixing check (results/pseudotime/<lineage>/figures/
+# knn_stage_mixing_*.csv) showed embryo, primary and cell-line cells share
+# <0.5% of neighbours, i.e. no intermediate cells to order. The pseudobulk DE
+# (rule pseudotime_de) is the main analysis; SCEPTIC is kept as a per-cell
+# stage-similarity score. Set true to run the full trajectory arm anyway.
+pseudotime_continuous: false
+
 # condition -> lineage (matched embryo -> primary cells -> cell line stocks)
 pseudotime_lineages:
   JupiterGFP-wMel-embryos:       Dmel_JupiterGFP

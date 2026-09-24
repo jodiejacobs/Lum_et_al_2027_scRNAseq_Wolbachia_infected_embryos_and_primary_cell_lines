@@ -279,13 +279,17 @@ rule all:
         "results/integrated/figures_atlas/.titer_by_annotation.done",
         # Embryo -> cell line trajectory/identity analysis
         "results/trajectory_analysis/.done",
-        # Embryo -> primary cells -> cell line pseudotime (per species + cross-species)
-        "results/pseudotime/integrated_with_pseudotime.h5ad",
-        # (function: PT_PAIRS is defined further down, in the pseudotime section)
-        lambda w: expand("results/pseudotime/pairs/{pair}/compare/.done", pair=PT_PAIRS),
-        # Discrete pseudobulk DE + concordance with tradeSeq
+        # Embryo -> primary cells -> cell line: pseudobulk DE (main analysis),
+        # atlas composition by stage, and the per-cell SCEPTIC stage score
         "results/pseudotime/de/.done",
-        "results/pseudotime/de/concordance/.done",
+        "results/pseudotime/composition/.done",
+        "results/pseudotime/integrated_with_pseudotime.h5ad",
+        # Continuous-trajectory steps (tradeSeq, joint tradeSeq, NMF, pairwise
+        # comparisons, DE-vs-tradeSeq), only when pseudotime_continuous: true.
+        # (function: PT_PAIRS is defined further down, in the pseudotime section)
+        lambda w: (expand("results/pseudotime/pairs/{pair}/compare/.done", pair=PT_PAIRS)
+                   + ["results/pseudotime/de/concordance/.done"]
+                   if config.get("pseudotime_continuous", False) else []),
         expand("results/rRNA_analysis/read_counts/{sample_id}/{gene}_read_counts.txt",
                sample_id=SAMPLE_IDS,
                gene=config.get("target_genes", ["GQX67_05945"]))
@@ -1308,6 +1312,28 @@ rule pseudotime_de_concordance:
         {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
             --groups {params.groups} --species {params.species} \
             --tradeseq_root results/pseudotime --out_dir results/pseudotime/de/concordance
+        """
+
+rule pseudotime_composition:
+    input:
+        integrated = rules.integrate.output.integrated,
+        lineages   = PT_LINEAGES_PATH,
+    output:
+        flag = touch("results/pseudotime/composition/.done"),
+    params:
+        script = "snakemake_scripts/pseudotime/composition_by_stage.py",
+        conf   = config.get("pseudotime_conf_threshold", 0.5),
+    log: "logs/pseudotime/composition.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 32000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --integrated {input.integrated} \
+            --lineages {input.lineages} --conf_threshold {params.conf} \
+            --out_dir results/pseudotime/composition
         """
 
 # Count reads aligning to Wolbachia 16S rRNA (GQX67_05945) vs total reads per sample
