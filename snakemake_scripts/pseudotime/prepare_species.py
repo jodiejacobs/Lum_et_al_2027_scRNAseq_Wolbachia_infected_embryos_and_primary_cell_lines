@@ -67,8 +67,8 @@ from pt_utils import savefig as _savefig, load_orthologs, remap_to_dmel, load_fl
 # proteins, mitochondrial genome, heat shock, and fly immediate-early /
 # dissociation-stress genes. Matched on FlyBase symbols. They stay in the
 # object (and in tradeSeq); override with --exclude_gene_regex.
-DEFAULT_EXCLUDE_REGEX = (r"^(Rp[LS]\d|RpLP|mRp[LS]|mt:|Hsp\d|Hsc70|Hsromega)"
-                         r"|^(kay|Jra|puc|Hr38|sr|Ets21C|Thor)$")
+DEFAULT_EXCLUDE_REGEX = (r"^(?:Rp[LS]\d|RpLP|mRp[LS]|mt:|Hsp\d|Hsc70|Hsromega)"
+                         r"|^(?:kay|Jra|puc|Hr38|sr|Ets21C|Thor)$")
 
 STAGE_ORDER = ["embryo", "primary_cells", "cell_culture"]
 STAGE_NUM = {s: i for i, s in enumerate(STAGE_ORDER)}
@@ -353,8 +353,9 @@ def main():
     sc.pp.log1p(adata)
     # genes excluded from the embedding (see DEFAULT_EXCLUDE_REGEX)
     sym = load_flybase_symbols(args.flybase_annotation)
-    adata.var["symbol"] = [sym.get(g, g) for g in adata.var_names]
-    excl = (adata.var["symbol"].str.contains(args.exclude_gene_regex, regex=True)
+    adata.var["symbol"] = [s if isinstance(s, str) else g
+                           for g, s in ((g, sym.get(g)) for g in adata.var_names)]
+    excl = (adata.var["symbol"].str.contains(args.exclude_gene_regex, regex=True, na=False)
             if args.exclude_gene_regex else pd.Series(False, index=adata.var_names))
     adata.var["pt_excluded"] = excl.values
     print(f"\nExcluded from HVG/PCA: {int(excl.sum())} genes "

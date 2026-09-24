@@ -397,7 +397,8 @@ tradeseq_time:             "24:00:00"
 tradeseq_joint_mem:        256000
 tradeseq_joint_time:       "36:00:00"
 
-# Pseudobulk DE (rule pseudotime_de, PyDESeq2; needs `pip install pydeseq2`
+# Pseudobulk DE (rule pseudotime_de, PyDESeq2; needs `pip install "pydeseq2==0.5.2"`
+# (last release that works with numpy<2, which numba in scanpy_env requires)
 # in scanpy_env). Samples with fewer trajectory cells than de_min_cells are
 # dropped. GSEA settings below are shared.
 de_min_cells: 30

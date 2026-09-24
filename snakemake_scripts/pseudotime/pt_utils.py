@@ -17,7 +17,7 @@ def load_flybase_symbols(flybase_annotation):
     if not flybase_annotation or not os.path.exists(flybase_annotation):
         return {}
     df = pd.read_csv(flybase_annotation, sep="\t", comment="#", header=None,
-                     usecols=[0, 2], dtype=str)
+                     usecols=[0, 2], dtype=str).dropna()
     return dict(zip(df[2], df[0]))
 
 
