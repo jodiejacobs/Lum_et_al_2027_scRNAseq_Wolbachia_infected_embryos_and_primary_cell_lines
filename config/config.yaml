@@ -373,6 +373,11 @@ pseudotime_root_min_frac:  0.01
 pseudotime_n_top_genes:    2000
 pseudotime_n_pcs:          30
 pseudotime_n_bins:         20
+# HVGs are picked WITHIN each sample (obs column below), so genes that only
+# separate samples/stages (and their sequencing runs) don't drive the PCA.
+# Ribosomal, mito, heat-shock and dissociation-stress genes are also kept out
+# of the PCA (DEFAULT_EXCLUDE_REGEX in prepare_species.py). "" = pooled HVGs.
+pseudotime_hvg_batch_key:  "source_file"
 pseudotime_harmony_key:    null   # all PIPseq, and replicate IDs aren't shared batches here -> no Harmony
 pseudotime_n_programs:     12     # per-species NMF programs
 pseudotime_threads:        8

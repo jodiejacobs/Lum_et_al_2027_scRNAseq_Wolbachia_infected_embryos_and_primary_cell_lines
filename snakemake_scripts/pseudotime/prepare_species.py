@@ -60,7 +60,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pt_utils import savefig as _savefig, load_orthologs, remap_to_dmel
+from pt_utils import savefig as _savefig, load_orthologs, remap_to_dmel, load_flybase_symbols
+
+# Genes left out of the embedding (HVG/PCA) because they mostly track library
+# prep and dissociation rather than cell state: cytosolic + mito ribosomal
+# proteins, mitochondrial genome, heat shock, and fly immediate-early /
+# dissociation-stress genes. Matched on FlyBase symbols. They stay in the
+# object (and in tradeSeq); override with --exclude_gene_regex.
+DEFAULT_EXCLUDE_REGEX = (r"^(Rp[LS]\d|RpLP|mRp[LS]|mt:|Hsp\d|Hsc70|Hsromega)"
+                         r"|^(kay|Jra|puc|Hr38|sr|Ets21C|Thor)$")
 
 STAGE_ORDER = ["embryo", "primary_cells", "cell_culture"]
 STAGE_NUM = {s: i for i, s in enumerate(STAGE_ORDER)}
@@ -68,7 +76,7 @@ STAGE_COLORS = {"embryo": "#4C72B0", "primary_cells": "#DD8452", "cell_culture":
 
 # obs columns copied from integrated.h5ad (whatever subset exists)
 OBS_KEEP = ["condition", "replicate", "method", "source_file", "sample_type",
-            "wolbachia_titer", "n_counts", "n_genes", "percent_mito",
+            "wolbachia_titer", "n_counts", "n_genes", "percent_mito", "doublet_score",
             "atlas_annotation", "atlas_annotation_confidence",
             "atlas_tissue", "atlas_tissue_confidence",
             "atlas_germ_layer", "atlas_germ_layer_confidence"]
@@ -191,6 +199,45 @@ def plot_overview(adata, fig_dir, species):
     _savefig(fig, os.path.join(fig_dir, f"dpt_by_condition_{species}.pdf"))
 
 
+def plot_qc(adata, fig_dir, species):
+    """Is the stage separation partly technical? QC metrics on the UMAP and a
+    per-sample QC table."""
+    sc.settings.figdir = fig_dir
+    cols = [c for c in ["n_counts", "n_genes", "percent_mito", "doublet_score"]
+            if c in adata.obs]
+    if not cols:
+        return
+    sc.pl.umap(adata, color=cols, show=False, ncols=2, cmap="viridis",
+               save=f"_pt_{species}_qc.pdf")
+    tab = (adata.obs.groupby(["sample_type", "condition"], observed=True)[cols]
+           .median().round(3))
+    tab.insert(0, "n_cells", adata.obs.groupby(["sample_type", "condition"],
+                                               observed=True).size())
+    tab.to_csv(os.path.join(fig_dir, f"qc_by_sample_{species}.csv"))
+    print("\nMedian QC per sample:\n" + tab.to_string())
+
+
+def knn_stage_mixing(adata, fig_dir, species):
+    """Fraction of each cell's kNN neighbours from each stage, averaged per
+    sample. If primary cells never neighbour embryo or cell-line cells, the
+    stages are disconnected and no continuous trajectory exists in this
+    embedding."""
+    conn = adata.obsp["distances"].tocsr()
+    stage = adata.obs["sample_type"].astype(str).values
+    stages = [s for s in STAGE_ORDER if s in set(stage)]
+    rows, cols_ = conn.nonzero()
+    nb = pd.DataFrame({"cell": rows, "nb_stage": stage[cols_]})
+    frac = (nb.groupby(["cell", "nb_stage"]).size().unstack(fill_value=0)
+            .reindex(columns=stages, fill_value=0))
+    frac = frac.div(frac.sum(axis=1), axis=0)
+    frac["condition"] = adata.obs["condition"].astype(str).values[frac.index]
+    frac["sample_type"] = stage[frac.index]
+    out = frac.groupby(["sample_type", "condition"])[stages].mean().round(4)
+    out.columns = [f"frac_neighbours_{c}" for c in stages]
+    out.to_csv(os.path.join(fig_dir, f"knn_stage_mixing_{species}.csv"))
+    print("\nkNN neighbours by stage (mean fraction per sample):\n" + out.to_string())
+
+
 def run_paga(adata, groups, fig_dir, species):
     try:
         sc.tl.paga(adata, groups=groups)
@@ -236,6 +283,14 @@ def main():
     p.add_argument("--n_pcs", type=int, default=30)
     p.add_argument("--n_neighbors", type=int, default=30)
     p.add_argument("--leiden_res", type=float, default=1.0)
+    p.add_argument("--hvg_batch_key", default="source_file",
+                   help="select HVGs within each value of this obs column (per sample), "
+                        "so genes that only differ BETWEEN samples/stages don't drive "
+                        "the embedding; '' = pooled HVGs")
+    p.add_argument("--exclude_gene_regex", default=DEFAULT_EXCLUDE_REGEX,
+                   help="FlyBase-symbol regex of genes kept out of HVG/PCA; '' = none")
+    p.add_argument("--flybase_annotation", default=None,
+                   help="fbgn_annotation_ID*.tsv.gz, for symbol-based gene exclusion")
     p.add_argument("--harmony_key", default=None,
                    help="obs column for Harmony; omit for no batch correction")
     p.add_argument("--out_h5ad", required=True)
@@ -296,7 +351,24 @@ def main():
     adata.layers["counts"] = adata.X.copy()
     sc.pp.normalize_total(adata, target_sum=1e4)
     sc.pp.log1p(adata)
-    sc.pp.highly_variable_genes(adata, n_top_genes=args.n_top_genes, flavor="seurat")
+    # genes excluded from the embedding (see DEFAULT_EXCLUDE_REGEX)
+    sym = load_flybase_symbols(args.flybase_annotation)
+    adata.var["symbol"] = [sym.get(g, g) for g in adata.var_names]
+    excl = (adata.var["symbol"].str.contains(args.exclude_gene_regex, regex=True)
+            if args.exclude_gene_regex else pd.Series(False, index=adata.var_names))
+    adata.var["pt_excluded"] = excl.values
+    print(f"\nExcluded from HVG/PCA: {int(excl.sum())} genes "
+          f"(e.g. {', '.join(adata.var.loc[excl, 'symbol'].head(8))})")
+    cand = adata[:, ~adata.var["pt_excluded"]].copy()
+    bk = args.hvg_batch_key if args.hvg_batch_key else None
+    sc.pp.highly_variable_genes(cand, n_top_genes=args.n_top_genes, flavor="seurat",
+                                batch_key=bk)
+    print(f"HVGs: {int(cand.var['highly_variable'].sum())} "
+          f"({'within each ' + bk if bk else 'pooled'})")
+    adata.var["highly_variable"] = adata.var_names.isin(
+        cand.var_names[cand.var["highly_variable"]])
+    adata.uns["pt_hvg_batch_key"] = bk or ""
+    del cand
     hvg = adata[:, adata.var["highly_variable"]].copy()
     sc.pp.scale(hvg, max_value=10)
     sc.tl.pca(hvg, n_comps=max(50, args.n_pcs))
@@ -328,6 +400,8 @@ def main():
         [s for s in STAGE_ORDER if s in adata.obs["sample_type"].cat.categories])
 
     plot_overview(adata, args.fig_dir, name)
+    plot_qc(adata, args.fig_dir, name)
+    knn_stage_mixing(adata, args.fig_dir, name)
     run_paga(adata, "condition", args.fig_dir, name)
     run_paga(adata, "leiden", args.fig_dir, name)
 

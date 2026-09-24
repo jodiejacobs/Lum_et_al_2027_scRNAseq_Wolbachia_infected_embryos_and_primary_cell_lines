@@ -1012,6 +1012,8 @@ rule pseudotime_prepare:
         n_pcs         = config.get("pseudotime_n_pcs", 30),
         harmony_flag  = (f"--harmony_key {config['pseudotime_harmony_key']}"
                          if config.get("pseudotime_harmony_key") else ""),
+        hvg_batch_key = config.get("pseudotime_hvg_batch_key", "source_file"),
+        flybase       = config["flybase_annotation"],
     log: "logs/pseudotime/prepare_{group}.log"
     threads: config.get("pseudotime_threads", 8)
     resources:
@@ -1027,6 +1029,7 @@ rule pseudotime_prepare:
             --host_gtf {params.host_gtf} {params.ortholog_flag} --symbiont_gtfs {params.symbiont_gtfs} \
             --conf_threshold {params.conf} --root_min_frac {params.root_min_frac} \
             --n_top_genes {params.n_top_genes} --n_pcs {params.n_pcs} {params.harmony_flag} \
+            --hvg_batch_key "{params.hvg_batch_key}" --flybase_annotation {params.flybase} \
             --out_h5ad {output.h5ad} --out_cells_csv {output.cells} --fig_dir {params.fig_dir}
         """
 
