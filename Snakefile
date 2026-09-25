@@ -282,6 +282,8 @@ rule all:
         # Embryo -> primary cells -> cell line: pseudobulk DE (main analysis),
         # atlas composition by stage, and the per-cell SCEPTIC stage score
         "results/pseudotime/de/.done",
+        "results/pseudotime/de_downsampled/.done",
+        "results/pseudotime/de_celltype/.done",
         "results/pseudotime/composition/.done",
         "results/pseudotime/integrated_with_pseudotime.h5ad",
         # Continuous-trajectory steps (tradeSeq, joint tradeSeq, NMF, pairwise
@@ -1289,6 +1291,83 @@ rule pseudotime_de:
             --flybase_annotation {params.flybase} --min_cells {params.min_cells} \
             --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
             --out_dir {params.out_dir}
+        """
+
+# Depth-matched sensitivity run: every cell downsampled to de_downsample_counts
+# UMIs before pseudobulk (primary cells were sequenced ~3-4x deeper than the
+# lines/embryos), compared contrast-by-contrast with the main DE run.
+rule pseudotime_de_downsampled:
+    input:
+        h5ads = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        ref   = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/de_downsampled/.done"),
+    params:
+        script    = "snakemake_scripts/pseudotime/de_stages.py",
+        target    = config.get("de_downsample_counts", 2000),
+        min_cells = config.get("de_min_cells", 30),
+        libs      = " ".join(config.get("pseudotime_gene_set_libraries",
+                                        ["GO_Biological_Process_2018"])),
+        gmt_flag  = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+        flybase   = config["flybase_annotation"],
+    log: "logs/pseudotime/de_downsampled.log"
+    threads: config.get("de_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = config.get("de_time", "4:00:00"),
+        runtime         = _hms_to_min(config.get("de_time", "4:00:00"))
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --downsample_counts {params.target} --reference_dir results/pseudotime/de \
+            --flybase_annotation {params.flybase} --min_cells {params.min_cells} \
+            --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
+            --out_dir results/pseudotime/de_downsampled
+        """
+
+# Cell-type-matched DE: the same models within one atlas cell type at a time
+# (cell types present at all three stages), separating loss of cell types
+# from expression change within cells. One subfolder per cell type.
+rule pseudotime_de_celltype:
+    input:
+        h5ads = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        ref   = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/de_celltype/.done"),
+    params:
+        script        = "snakemake_scripts/pseudotime/de_stages.py",
+        celltypes     = " ".join(f'"{t}"' for t in (config.get("de_celltypes") or ["auto"])
+                                 ) if isinstance(config.get("de_celltypes"), list)
+                        else f'"{config.get("de_celltypes", "auto")}"',
+        min_lineages  = config.get("de_celltype_min_lineages", 3),
+        top_n         = config.get("de_celltype_top_n", 3),
+        min_cells     = config.get("de_celltype_min_cells", 20),
+        conf          = config.get("pseudotime_conf_threshold", 0.5),
+        ds_flag       = (f"--downsample_counts {config['de_downsample_counts']}"
+                         if config.get("de_celltype_downsample", False) else ""),
+        libs          = " ".join(config.get("pseudotime_gene_set_libraries",
+                                            ["GO_Biological_Process_2018"])),
+        gmt_flag      = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea     = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+        flybase       = config["flybase_annotation"],
+    log: "logs/pseudotime/de_celltype.log"
+    threads: config.get("de_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = config.get("de_celltype_time", "8:00:00"),
+        runtime         = _hms_to_min(config.get("de_celltype_time", "8:00:00"))
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --celltypes {params.celltypes} --celltype_conf {params.conf} \
+            --celltype_min_lineages {params.min_lineages} --celltype_top_n {params.top_n} \
+            --min_cells {params.min_cells} {params.ds_flag} --reference_dir results/pseudotime/de \
+            --flybase_annotation {params.flybase} \
+            --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
+            --out_dir results/pseudotime/de_celltype
         """
 
 rule pseudotime_de_concordance:

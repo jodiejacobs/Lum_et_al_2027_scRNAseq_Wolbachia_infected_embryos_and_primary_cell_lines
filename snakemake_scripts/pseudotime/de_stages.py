@@ -32,6 +32,18 @@ Also
     (+ sign test), heatmap of the top genes
   - preranked GSEA on every contrast (rank = Wald stat)
 
+Sensitivity / refinement modes (same models, separate output dirs):
+  --downsample_counts N : every cell downsampled to <= N UMIs before
+      pseudobulk, so stages sequenced at different depths are compared at
+      matched depth (primary cells were sequenced ~3-4x deeper than lines).
+  --celltypes auto|<types> : models run within one atlas cell type at a time
+      (confidence >= --celltype_conf), separating "cell types are lost" from
+      "cells change expression". 'auto' picks types with >= --min_cells
+      confident cells at all three stages in >= --celltype_min_lineages
+      lineages.
+  --reference_dir : compare every contrast with the main run
+      (robustness_vs_reference.csv).
+
 Caveat: embryo and primary stages have one library per lineage, and stage is
 confounded with sequencing run, so stage effects include batch. n is small
 (2 lineages per species); treat per-species results as lower-powered than
@@ -70,13 +82,42 @@ CONTRASTS = [("primary_vs_embryo", "primary", "embryo"),
 # Pseudobulk
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pseudobulk(paths, min_cells):
+def load_cells(path, celltype=None, celltype_col="atlas_annotation", conf_thr=0.5):
+    """Trajectory cells of one prepared object, optionally one confident cell type."""
+    a = ad.read_h5ad(path)
+    if celltype is not None:
+        keep = a.obs[celltype_col].astype(str) == celltype
+        conf = f"{celltype_col}_confidence"
+        if conf in a.obs:
+            keep &= a.obs[conf] >= conf_thr
+        a = a[keep.values].copy()
+    return a
+
+
+def downsample(X, target, seed):
+    """Per-cell downsampling (without replacement) of raw counts to `target`
+    UMIs; cells already below target are left unchanged."""
+    import scanpy as sc
+    b = ad.AnnData(X=X.astype(np.float32))
+    sc.pp.downsample_counts(b, counts_per_cell=target, random_state=seed, replace=False)
+    return sp.csr_matrix(b.X)
+
+
+def pseudobulk(paths, min_cells, downsample_to=None, celltype=None,
+               celltype_col="atlas_annotation", conf_thr=0.5, seed=0):
     counts, meta, genes_by_species = [], [], {}
     for p in paths:
-        a = ad.read_h5ad(p)
+        a = load_cells(p, celltype, celltype_col, conf_thr)
+        sp_ = str(a.obs["species"].iloc[0]) if a.n_obs else None
+        if a.n_obs == 0:
+            print(f"  {os.path.basename(p)}: no cells{' of ' + celltype if celltype else ''}")
+            continue
         X = a.layers["counts"]
         X = X.tocsr() if sp.issparse(X) else sp.csr_matrix(X)
-        sp_ = str(a.obs["species"].iloc[0])
+        umi_before = np.asarray(X.sum(axis=1)).ravel()
+        if downsample_to:
+            X = downsample(X, downsample_to, seed)
+        umi_after = np.asarray(X.sum(axis=1)).ravel()
         genes_by_species.setdefault(sp_, set()).update(a.var_names)
         for s, idx in a.obs.groupby("source_file", observed=True).indices.items():
             o = a.obs.iloc[idx[0]]
@@ -84,8 +125,11 @@ def pseudobulk(paths, min_cells):
                                     index=a.var_names, name=s))
             meta.append(dict(sample=s, condition=o["condition"], lineage=o["lineage"],
                              species=sp_, stage=STAGE_MAP[str(o["sample_type"])],
-                             n_cells=len(idx)))
-        print(f"  {os.path.basename(p)}: {a.obs['source_file'].nunique()} samples")
+                             n_cells=len(idx),
+                             median_umi_per_cell=float(np.median(umi_before[idx])),
+                             median_umi_after_downsampling=float(np.median(umi_after[idx]))))
+        print(f"  {os.path.basename(p)}: {a.n_obs} cells, "
+              f"{a.obs['source_file'].nunique()} samples")
     cm = pd.concat(counts, axis=1).fillna(0).T.round().astype(int)
     md = pd.DataFrame(meta).set_index("sample")
     drop = md.index[md["n_cells"] < min_cells]
@@ -93,6 +137,30 @@ def pseudobulk(paths, min_cells):
         print(f"  WARNING: dropping samples with < {min_cells} cells: {list(drop)}")
     md = md.drop(drop)
     return cm.loc[md.index], md, genes_by_species
+
+
+def choose_celltypes(paths, celltype_col, conf_thr, min_cells, min_lineages, top_n, out):
+    """Cell types with >= min_cells confident cells at ALL three stages in
+    >= min_lineages lineages, ranked by number of such lineages then total cells."""
+    obs = []
+    for p in paths:
+        o = ad.read_h5ad(p, backed="r").obs
+        conf = f"{celltype_col}_confidence"
+        o = o[o[conf] >= conf_thr] if conf in o else o
+        obs.append(o[["lineage", "sample_type", celltype_col]].astype(str))
+    obs = pd.concat(obs)
+    n = obs.groupby([celltype_col, "lineage", "sample_type"]).size().unstack(fill_value=0)
+    n = n.reindex(columns=list(STAGE_MAP), fill_value=0)
+    n["min_across_stages"] = n[list(STAGE_MAP)].min(axis=1)
+    n.to_csv(os.path.join(out, "celltype_counts_by_lineage_stage.csv"))
+    ok = n[n["min_across_stages"] >= min_cells].reset_index()
+    rank = (ok.groupby(celltype_col)
+            .agg(n_lineages=("lineage", "nunique"), total_min_cells=("min_across_stages", "sum"))
+            .query("n_lineages >= @min_lineages")
+            .sort_values(["n_lineages", "total_min_cells"], ascending=False))
+    rank.to_csv(os.path.join(out, "celltype_selection.csv"))
+    print("Cell types present at all stages:\n" + rank.to_string())
+    return list(rank.index[:top_n])
 
 
 def filter_genes(cm, min_count=10, min_samples=2):
@@ -247,31 +315,12 @@ def gsea_all(results, gene_sets, out, permutations, top_terms=25):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--h5ads", nargs="+", required=True, help="prepared_<trajectory>.h5ad files")
-    p.add_argument("--flybase_annotation", default=None)
-    p.add_argument("--min_cells", type=int, default=30)
-    p.add_argument("--alpha", type=float, default=0.05)
-    p.add_argument("--n_cpus", type=int, default=4)
-    p.add_argument("--gene_set_libraries", nargs="*", default=["GO_Biological_Process_2018"])
-    p.add_argument("--gene_set_organism", default="Fly")
-    p.add_argument("--gmt", default=None)
-    p.add_argument("--gsea_permutations", type=int, default=1000)
-    p.add_argument("--skip_gsea", action="store_true")
-    p.add_argument("--out_dir", required=True)
-    args = p.parse_args()
-    out = args.out_dir
+def run_models(cm, md, genes_by_species, out, args, sym):
+    """Per-species, pooled and interaction models + consistency + GSEA in `out`."""
     os.makedirs(out, exist_ok=True)
-    sym = load_flybase_symbols(args.flybase_annotation)
-
-    print("Building pseudobulk")
-    cm, md, genes_by_species = pseudobulk(args.h5ads, args.min_cells)
     md.to_csv(os.path.join(out, "pseudobulk_samples.csv"))
     cm.T.to_csv(os.path.join(out, "pseudobulk_counts.csv.gz"))
     print(md.to_string())
-
     results, summary = {}, []
 
     def record(key, res):
@@ -285,26 +334,39 @@ def main():
                             n_down=int((s & (res["log2FoldChange"] < 0)).sum())))
         print(f"  {key}: {summary[-1]['n_sig']} genes padj < {args.alpha}")
 
+    def contrasts_for(m):
+        have = set(m["stage"])
+        return [(n, b, a) for n, b, a in CONTRASTS if {a, b} <= have]
+
     # per species
     for sp_ in sorted(md["species"].unique()):
         m = md[md["species"] == sp_]
+        if m["stage"].nunique() < 2:
+            print(f"\n[{sp_}] fewer than 2 stages -- skipped")
+            continue
         c = filter_genes(cm.loc[m.index])
         design = "~lineage + stage" if m["lineage"].nunique() > 1 else "~stage"
         print(f"\n[{sp_}] {len(m)} samples x {c.shape[1]} genes, design {design}")
-        dds = fit(c, m, design, args.n_cpus)
-        for name, b, a in CONTRASTS:
-            record(f"{sp_}_{name}", run_contrast(dds, ["stage", b, a], sym, args.n_cpus))
+        try:
+            dds = fit(c, m, design, args.n_cpus)
+            for name, b, a in contrasts_for(m):
+                record(f"{sp_}_{name}", run_contrast(dds, ["stage", b, a], sym, args.n_cpus))
+        except Exception as e:
+            print(f"  WARNING: {sp_} model failed: {e}")
 
     # pooled + interaction (genes present in every species)
     if md["species"].nunique() > 1:
         shared = sorted(set.intersection(*genes_by_species.values()))
         c = filter_genes(cm[shared])
         print(f"\n[pooled] {len(md)} samples x {c.shape[1]} shared genes, design ~lineage + stage")
-        dds = fit(c, md, "~lineage + stage", args.n_cpus)
         pooled = {}
-        for name, b, a in CONTRASTS:
-            pooled[name] = run_contrast(dds, ["stage", b, a], sym, args.n_cpus)
-            record(f"pooled_{name}", pooled[name])
+        try:
+            dds = fit(c, md, "~lineage + stage", args.n_cpus)
+            for name, b, a in contrasts_for(md):
+                pooled[name] = run_contrast(dds, ["stage", b, a], sym, args.n_cpus)
+                record(f"pooled_{name}", pooled[name])
+        except Exception as e:
+            print(f"  WARNING: pooled model failed: {e}")
 
         other = [s for s in sorted(md["species"].unique()) if s != "Dmel"][0]
         mi = md.copy()
@@ -312,28 +374,130 @@ def main():
         mi["dsim_line"] = ((mi["species"] == other) & (mi["stage"] == "line")).astype(float)
         design = "~lineage + stage + dsim_primary + dsim_line"
         print(f"\n[interaction] {design} ({other} vs Dmel)")
-        dds = fit(c, mi, design, args.n_cpus)
-        cols = list(dds.obsm["design_matrix"].columns)
-        print(f"  design columns: {cols}")
-        ip = [x for x in cols if "dsim_primary" in x][0]
-        il = [x for x in cols if "dsim_line" in x][0]
-        for name, vec in [("primary_vs_embryo", {ip: 1}),
-                          ("line_vs_primary", {il: 1, ip: -1}),
-                          ("line_vs_embryo", {il: 1})]:
-            record(f"interaction_{other}_minus_Dmel_{name}",
-                   run_contrast(dds, coef_vector(dds, vec), sym, args.n_cpus))
+        try:
+            dds = fit(c, mi, design, args.n_cpus)
+            cols = list(dds.obsm["design_matrix"].columns)
+            ip = [x for x in cols if "dsim_primary" in x][0]
+            il = [x for x in cols if "dsim_line" in x][0]
+            for name, vec in [("primary_vs_embryo", {ip: 1}),
+                              ("line_vs_primary", {il: 1, ip: -1}),
+                              ("line_vs_embryo", {il: 1})]:
+                record(f"interaction_{other}_minus_Dmel_{name}",
+                       run_contrast(dds, coef_vector(dds, vec), sym, args.n_cpus))
+        except Exception as e:
+            print(f"  WARNING: interaction model failed (a species may lack a stage): {e}")
 
-        print("\nPer-lineage consistency")
-        lineage_consistency(cm[c.columns], md, pooled, sym, out, args.alpha)
+        if len(pooled) == len(CONTRASTS):
+            print("\nPer-lineage consistency")
+            lineage_consistency(cm[c.columns], md, pooled, sym, out, args.alpha)
 
-    pd.DataFrame(summary).to_csv(os.path.join(out, "de_summary.csv"), index=False)
-    print("\n" + pd.DataFrame(summary).to_string(index=False))
+    summ = pd.DataFrame(summary)
+    summ.to_csv(os.path.join(out, "de_summary.csv"), index=False)
+    print("\n" + summ.to_string(index=False))
 
-    if not args.skip_gsea:
+    if args.reference_dir:
+        robustness(results, args.reference_dir, out, args.alpha)
+
+    if not args.skip_gsea and results:
         gs = load_gene_sets(args.gmt, args.gene_set_libraries, args.gene_set_organism)
         if gs:
             print("\nGSEA")
             gsea_all(results, gs, out, args.gsea_permutations)
+    return summ
+
+
+def robustness(results, ref_dir, out, alpha):
+    """Compare each contrast with the same contrast in a reference DE run
+    (e.g. the full-depth, all-cell-type run)."""
+    rows = []
+    for key, res in results.items():
+        ref_p = os.path.join(ref_dir, f"de_{key}.csv")
+        if not os.path.exists(ref_p):
+            continue
+        ref = pd.read_csv(ref_p, index_col=0)
+        u = res.index.intersection(ref.index)
+        a_sig = set(ref.index[ref["padj"] < alpha]) & set(u)
+        b_sig = set(res.index[res["padj"] < alpha]) & set(u)
+        both = a_sig & b_sig
+        same_dir = (np.sign(ref.loc[list(both), "log2FoldChange"])
+                    == np.sign(res.loc[list(both), "log2FoldChange"])).mean() if both else np.nan
+        rho = ref.loc[u, "log2FoldChange"].corr(res.loc[u, "log2FoldChange"], method="spearman")
+        ref_down = set(ref.index[(ref["padj"] < alpha) & (ref["log2FoldChange"] < 0)]) & set(u)
+        ref_up = set(ref.index[(ref["padj"] < alpha) & (ref["log2FoldChange"] > 0)]) & set(u)
+        rows.append(dict(contrast=key, n_genes_both_runs=len(u), n_sig_reference=len(a_sig),
+                         n_sig_this_run=len(b_sig), n_sig_both=len(both),
+                         frac_reference_retained=len(both) / max(1, len(a_sig)),
+                         frac_reference_up_retained=len(ref_up & b_sig) / max(1, len(ref_up)),
+                         frac_reference_down_retained=len(ref_down & b_sig) / max(1, len(ref_down)),
+                         direction_agreement=same_dir, log2FC_spearman=rho))
+    if rows:
+        r = pd.DataFrame(rows)
+        r.to_csv(os.path.join(out, "robustness_vs_reference.csv"), index=False)
+        print("\nAgreement with reference run:\n" + r.round(3).to_string(index=False))
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--h5ads", nargs="+", required=True, help="prepared_<trajectory>.h5ad files")
+    p.add_argument("--flybase_annotation", default=None)
+    p.add_argument("--min_cells", type=int, default=30)
+    p.add_argument("--alpha", type=float, default=0.05)
+    p.add_argument("--n_cpus", type=int, default=4)
+    p.add_argument("--downsample_counts", type=int, default=None,
+                   help="downsample every cell to this many UMIs before pseudobulk "
+                        "(cells below it are unchanged); depth-matched sensitivity run")
+    p.add_argument("--celltypes", nargs="*", default=None,
+                   help="run the models within each of these atlas cell types; "
+                        "'auto' = pick types present at all stages (see below)")
+    p.add_argument("--celltype_col", default="atlas_annotation")
+    p.add_argument("--celltype_conf", type=float, default=0.5)
+    p.add_argument("--celltype_min_lineages", type=int, default=3)
+    p.add_argument("--celltype_top_n", type=int, default=3)
+    p.add_argument("--reference_dir", default=None,
+                   help="main DE output dir; writes robustness_vs_reference.csv")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--gene_set_libraries", nargs="*", default=["GO_Biological_Process_2018"])
+    p.add_argument("--gene_set_organism", default="Fly")
+    p.add_argument("--gmt", default=None)
+    p.add_argument("--gsea_permutations", type=int, default=1000)
+    p.add_argument("--skip_gsea", action="store_true")
+    p.add_argument("--out_dir", required=True)
+    args = p.parse_args()
+    out = args.out_dir
+    os.makedirs(out, exist_ok=True)
+    sym = load_flybase_symbols(args.flybase_annotation)
+    if args.downsample_counts:
+        print(f"Downsampling every cell to <= {args.downsample_counts} UMIs")
+
+    if not args.celltypes:
+        print("Building pseudobulk")
+        cm, md, gbs = pseudobulk(args.h5ads, args.min_cells, args.downsample_counts,
+                                 seed=args.seed)
+        run_models(cm, md, gbs, out, args, sym)
+    else:
+        types = args.celltypes
+        if types == ["auto"]:
+            types = choose_celltypes(args.h5ads, args.celltype_col, args.celltype_conf,
+                                     args.min_cells, args.celltype_min_lineages,
+                                     args.celltype_top_n, out)
+        if not types:
+            print("No cell type is present at all stages in enough lineages; nothing to run.")
+        allsumm = []
+        for t in types:
+            safe = "".join(ch if ch.isalnum() else "_" for ch in t).strip("_")
+            print(f"\n==================== cell type: {t} ====================")
+            cm, md, gbs = pseudobulk(args.h5ads, args.min_cells, args.downsample_counts,
+                                     celltype=t, celltype_col=args.celltype_col,
+                                     conf_thr=args.celltype_conf, seed=args.seed)
+            if md.empty:
+                print("  no samples left; skipped")
+                continue
+            summ = run_models(cm, md, gbs, os.path.join(out, safe), args, sym)
+            summ.insert(0, "celltype", t)
+            allsumm.append(summ)
+        if allsumm:
+            pd.concat(allsumm).to_csv(os.path.join(out, "de_summary_by_celltype.csv"), index=False)
     print("\nDone ->", out)
 
 

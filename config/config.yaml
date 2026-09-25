@@ -415,6 +415,24 @@ de_threads:   8
 de_mem:       64000
 de_time:      "4:00:00"
 
+# Depth-matched sensitivity DE (rule pseudotime_de_downsampled): every cell
+# downsampled to this many UMIs before pseudobulk. Primary cells median
+# ~10-12k UMIs/cell, lines ~2.5-4k, Dmel embryos ~2.4k, Dsim embryos ~0.5k
+# (cells below the target are left as is).
+de_downsample_counts: 2000
+
+# Cell-type-matched DE (rule pseudotime_de_celltype): "auto" picks the
+# de_celltype_top_n atlas_annotation types with >= de_celltype_min_cells
+# confident cells at all three stages in >= de_celltype_min_lineages lineages
+# (see results/pseudotime/de_celltype/celltype_selection.csv); or give a list,
+# e.g. ["hemolymph", "CNS"].
+de_celltypes: "auto"
+de_celltype_min_lineages: 3
+de_celltype_top_n:        3
+de_celltype_min_cells:    20
+de_celltype_downsample:   false   # true = also depth-match within cell types
+de_celltype_time:         "8:00:00"
+
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
 # Dmel gene symbols to run offline, or pseudotime_skip_gsea: true.
