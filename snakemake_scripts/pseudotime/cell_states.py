@@ -34,6 +34,9 @@ Part 2 -- are there cell-line precursors in the primary culture?
     module and the leading-edge genes of line-up GSEA terms matching
     --exclude_terms_regex (cell cycle, DNA replication, ribosome biogenesis,
     translation, chromatin), so proliferation alone cannot drive rho.
+    A third set, "no_prolif_ribo_mito", also drops mitochondrial/respiration
+    leading-edge genes and nuclear-encoded OXPHOS genes. Each test also has a
+    depth-matched null (z_depth, p_perm_depth; depth_ratio = set/other median UMIs).
     Dropped genes: precursor_rank_test_excluded_genes.csv.
   * Candidates vs other primary cells: module scores (Wilcoxon), state mix,
     SCEPTIC P(cell line), exploratory Wilcoxon marker genes, and overlap of
@@ -155,6 +158,8 @@ EXCLUDE_TERMS_REGEX = (r"ribosom|rRNA|DNA replication|DNA-dependent DNA|mitotic|
                        r"cell cycle|cell division|peptide biosynthetic|translation|"
                        r"protein-DNA complex|epigenetic|mismatch repair|DNA metabolic|"
                        r"recombination|telomere|ncRNA processing|ribonucleoprotein complex")
+MITO_TERMS_REGEX = (r"mitochondri|respirat|electron transport|oxidative phosphorylation|"
+                    r"ATP synthesis|ATP metabolic|aerobic|NADH|cytochrome|tricarboxylic|TCA cycle")
 
 
 def prolif_ribo_genes(de, gsea_path, terms_regex, prolif_symbols, fdr=0.05):
@@ -179,7 +184,9 @@ def rank_test(adata, prim_idx, masks, de, n_perm, seed=0, exclude=()):
     difference (candidates - other primary cells) and the DE log2FC, on
     EVALUATION genes only: genes tested in the DE that are NOT HVGs, because
     line_similarity (which picks one candidate set) is computed on the HVGs.
-    Null: the same statistic for n_perm random primary-cell sets of equal size."""
+    Null: the same statistic for n_perm random primary-cell sets of equal size.
+    Depth-matched null: random sets drawn to match the candidate set's
+    distribution over deciles of per-cell UMI count (layers['counts'])."""
     hv = adata.var["highly_variable"].values if "highly_variable" in adata.var else \
         np.zeros(adata.n_vars, bool)
     genes = adata.var_names[~hv].intersection(de.index[de["log2FoldChange"].notna()])
@@ -194,6 +201,19 @@ def rank_test(adata, prim_idx, masks, de, n_perm, seed=0, exclude=()):
     n = X.shape[0]
     lfc = de.loc[genes, "log2FoldChange"].values
     rng = np.random.default_rng(seed)
+    sub = adata[prim_idx]
+    C = sub.layers["counts"] if "counts" in sub.layers else None
+    depth = (np.asarray(C.sum(axis=1)).ravel() if C is not None
+             else sub.obs["n_counts"].values if "n_counts" in sub.obs else None)
+    bins = (pd.qcut(np.log1p(depth), 10, labels=False, duplicates="drop")
+            if depth is not None else None)
+
+    def depth_matched(mask):
+        idx = []
+        for b, c in pd.Series(bins[mask]).value_counts().items():
+            pool = np.flatnonzero(bins == b)
+            idx.extend(rng.choice(pool, min(c, len(pool)), replace=False))
+        return np.isin(np.arange(n), idx)
 
     def stat(mask):
         k = mask.sum()
@@ -210,10 +230,17 @@ def rank_test(adata, prim_idx, masks, de, n_perm, seed=0, exclude=()):
         obs_rho = stat(mask)
         null = np.array([stat(np.isin(np.arange(n), rng.choice(n, k, replace=False)))
                          for _ in range(n_perm)])
-        rows.append(dict(candidate_set=name, n_cells=k, n_eval_genes=len(genes),
-                         rho=obs_rho, null_mean=null.mean(), null_sd=null.std(ddof=1),
-                         z=(obs_rho - null.mean()) / (null.std(ddof=1) + 1e-12),
-                         p_perm=(1 + (null >= obs_rho).sum()) / (1 + n_perm)))
+        row = dict(candidate_set=name, n_cells=k, n_eval_genes=len(genes),
+                   rho=obs_rho, null_mean=null.mean(), null_sd=null.std(ddof=1),
+                   z=(obs_rho - null.mean()) / (null.std(ddof=1) + 1e-12),
+                   p_perm=(1 + (null >= obs_rho).sum()) / (1 + n_perm))
+        if bins is not None:
+            nd = np.array([stat(depth_matched(mask)) for _ in range(n_perm)])
+            row.update(depth_ratio=np.median(depth[mask]) / np.median(depth[~mask]),
+                       null_depth_mean=nd.mean(),
+                       z_depth=(obs_rho - nd.mean()) / (nd.std(ddof=1) + 1e-12),
+                       p_perm_depth=(1 + (nd >= obs_rho).sum()) / (1 + n_perm))
+        rows.append(row)
     return rows
 
 
@@ -358,9 +385,15 @@ def main():
             excl, terms = prolif_ribo_genes(de, gsea_p, args.exclude_terms_regex,
                                             modules.get("proliferation", []))
             print(f"  {name}: no_prolif_ribo drops {len(excl)} genes from {len(terms)} GSEA terms")
-            excl_rows.extend(dict(trajectory=name, gene_id=g, symbol=de.at[g, "symbol"])
-                             for g in sorted(excl))
-            for gene_set, ex in [("all", ()), ("no_prolif_ribo", excl)]:
+            excl_rows.extend(dict(trajectory=name, gene_id=g, symbol=de.at[g, "symbol"],
+                                  gene_set="prolif_ribo") for g in sorted(excl))
+            mito, _ = prolif_ribo_genes(de, gsea_p, MITO_TERMS_REGEX, [])
+            mito |= set(de.index[de["symbol"].astype(str).str.match(r"^(mt:|mRp|ND-|COX|Cyt-c|ATPsyn)")])
+            print(f"  {name}: no_prolif_ribo_mito drops {len(mito - excl)} more genes")
+            excl_rows.extend(dict(trajectory=name, gene_id=g, symbol=de.at[g, "symbol"],
+                                  gene_set="mito") for g in sorted(mito - excl))
+            for gene_set, ex in [("all", ()), ("no_prolif_ribo", excl),
+                                 ("no_prolif_ribo_mito", excl | mito)]:
                 for r in rank_test(adata, prim.index, masks, de, args.n_perm, exclude=ex):
                     r.update(trajectory=name, species=species, gene_set=gene_set)
                     rank_rows.append(r)
@@ -419,24 +452,29 @@ def main():
         pr.to_csv(os.path.join(out, "precursors_summary.csv"), index=False)
         print("\nPrecursor candidates in primary culture:\n" + pr.round(3).to_string(index=False))
     if rank_rows:
-        rr = pd.DataFrame(rank_rows)[["trajectory", "species", "gene_set", "candidate_set", "n_cells",
-                                      "n_eval_genes", "rho", "null_mean", "null_sd", "z", "p_perm"]]
+        rr = pd.DataFrame(rank_rows)
+        rr = rr[[c for c in ["trajectory", "species", "gene_set", "candidate_set", "n_cells",
+                             "n_eval_genes", "depth_ratio", "rho", "null_mean", "null_sd", "z",
+                             "p_perm", "null_depth_mean", "z_depth", "p_perm_depth"] if c in rr]]
         rr.to_csv(os.path.join(out, "precursor_rank_test.csv"), index=False)
         print("\nRank test vs. pseudobulk line-vs-primary log2FC (non-HVG genes):\n"
               + rr.round(3).to_string(index=False))
         pd.DataFrame(excl_rows).to_csv(os.path.join(out, "precursor_rank_test_excluded_genes.csv"),
                                        index=False)
         sets = list(rr["gene_set"].unique())
-        fig, axes = plt.subplots(1, len(sets), figsize=(6 * len(sets), 3.5), sharey=True,
-                                 squeeze=False)
-        for ax, gs in zip(axes[0], sets):
-            sns.barplot(data=rr[rr["gene_set"] == gs], x="trajectory", y="z",
-                        hue="candidate_set", ax=ax)
-            ax.axhline(0, c="k", lw=0.6)
-            ax.set_title(f"genes: {gs}", fontsize=9)
-            ax.tick_params(axis="x", rotation=20)
-            ax.legend(fontsize=7)
-        axes[0, 0].set_ylabel("z vs. random primary-cell sets")
+        zcols = [c for c in ["z", "z_depth"] if c in rr]
+        fig, axes = plt.subplots(len(zcols), len(sets), figsize=(6 * len(sets), 3.5 * len(zcols)),
+                                 sharey=True, squeeze=False)
+        for i, zc in enumerate(zcols):
+            for ax, gs in zip(axes[i], sets):
+                sns.barplot(data=rr[rr["gene_set"] == gs], x="trajectory", y=zc,
+                            hue="candidate_set", ax=ax)
+                ax.axhline(0, c="k", lw=0.6)
+                ax.set_title(f"genes: {gs}", fontsize=9)
+                ax.tick_params(axis="x", rotation=20)
+                ax.legend(fontsize=7)
+            axes[i, 0].set_ylabel({"z": "z vs. random sets",
+                                   "z_depth": "z vs. depth-matched sets"}[zc])
         fig.suptitle("Primary-cell subsets: shift toward the cell-line expression change",
                      fontsize=9)
         savefig(fig, os.path.join(out, "precursor_rank_test.pdf"))
