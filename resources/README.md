@@ -34,11 +34,11 @@ more useful later.
 
 Tattikota et al. 2020, *eLife* 9:e54818 -- *A single-cell survey of Drosophila
 blood*. doi:10.7554/eLife.54818. GEO: GSE146596. No h5ad/loom is published, so
-build one from the GEO sparse matrix + metadata:
+build one from the GEO count table + metadata:
 
 ```
 cd resources/tattikota2020
-bash download_GSE146596.sh     # ~83 MB
+bash download_GSE146596.sh     # ~22 MB
 python build_h5ad.py           # -> tattikota2020_hemocytes.h5ad
 ```
 
