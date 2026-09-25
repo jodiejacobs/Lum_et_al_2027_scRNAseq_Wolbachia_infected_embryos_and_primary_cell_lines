@@ -447,6 +447,8 @@ precursor_n_perm: 200
 # infection_by_stage.py flags samples whose observed Wolbachia signal disagrees.
 infection_status:
   ubkhc: uninfected   # cell line; "wMel" in the FASTQ names is a labelling mistake
+  Dsim-Merrill23: uninfected
+  Dsim6B: uninfected
 
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
