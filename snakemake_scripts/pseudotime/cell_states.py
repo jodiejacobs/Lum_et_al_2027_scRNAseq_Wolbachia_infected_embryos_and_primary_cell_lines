@@ -29,7 +29,12 @@ Part 2 -- are there cell-line precursors in the primary culture?
     the pseudobulk line-vs-primary log2FC, on non-HVG genes only (candidates
     are picked on HVGs, so this avoids circularity), against random
     primary-cell sets of equal size. Candidate sets: most line-similar, most
-    proliferative, least AMP/immune-active (same size each).
+    proliferative, least AMP/immune-active (same size each). Run twice:
+    gene_set "all" and "no_prolif_ribo", which also drops the proliferation
+    module and the leading-edge genes of line-up GSEA terms matching
+    --exclude_terms_regex (cell cycle, DNA replication, ribosome biogenesis,
+    translation, chromatin), so proliferation alone cannot drive rho.
+    Dropped genes: precursor_rank_test_excluded_genes.csv.
   * Candidates vs other primary cells: module scores (Wilcoxon), state mix,
     SCEPTIC P(cell line), exploratory Wilcoxon marker genes, and overlap of
     those markers with the pseudobulk line-vs-primary up genes (Fisher test).
@@ -145,7 +150,29 @@ def line_similarity(adata):
     return rowcorr(X, cent["cell_culture"]) - rowcorr(X, cent["primary_cells"])
 
 
-def rank_test(adata, prim_idx, masks, de, n_perm, seed=0):
+EXCLUDE_TERMS_REGEX = (r"ribosom|rRNA|DNA replication|DNA-dependent DNA|mitotic|mitosis|spindle|"
+                       r"cytokinesis|chromosome|DNA packaging|chromatin|nucleosome|metaphase|"
+                       r"cell cycle|cell division|peptide biosynthetic|translation|"
+                       r"protein-DNA complex|epigenetic|mismatch repair|DNA metabolic|"
+                       r"recombination|telomere|ncRNA processing|ribonucleoprotein complex")
+
+
+def prolif_ribo_genes(de, gsea_path, terms_regex, prolif_symbols, fdr=0.05):
+    """FBgn IDs of the proliferation module plus leading-edge genes of line-up
+    (NES > 0, FDR < fdr) GSEA terms matching terms_regex. Returns (ids, terms)."""
+    syms = set(prolif_symbols)
+    terms = []
+    if gsea_path and os.path.exists(gsea_path):
+        g = pd.read_csv(gsea_path)
+        g = g[(g["NES"] > 0) & (g["FDR q-val"] < fdr)
+              & g["Term"].str.contains(terms_regex, case=False, regex=True)]
+        terms = g["Term"].tolist()
+        for lead in g["Lead_genes"].dropna():
+            syms.update(lead.split(";"))
+    return set(de.index[de["symbol"].astype(str).isin(syms)]), terms
+
+
+def rank_test(adata, prim_idx, masks, de, n_perm, seed=0, exclude=()):
     """Does a candidate set's expression shift (vs. the rest of the primary
     culture) point the same way as the pseudobulk line-vs-primary change,
     transcriptome-wide? Spearman rho between per-gene mean log-expression
@@ -156,6 +183,7 @@ def rank_test(adata, prim_idx, masks, de, n_perm, seed=0):
     hv = adata.var["highly_variable"].values if "highly_variable" in adata.var else \
         np.zeros(adata.n_vars, bool)
     genes = adata.var_names[~hv].intersection(de.index[de["log2FoldChange"].notna()])
+    genes = genes.difference(pd.Index(list(exclude)))
     if len(genes) < 100:
         return []
     cols = adata.var_names.get_indexer(genes)
@@ -203,6 +231,8 @@ def main():
     p.add_argument("--top_frac", type=float, default=0.05)
     p.add_argument("--n_perm", type=int, default=200,
                    help="random primary-cell sets for the rank-test null")
+    p.add_argument("--exclude_terms_regex", default=EXCLUDE_TERMS_REGEX,
+                   help="GSEA terms whose leading-edge genes the no_prolif_ribo rank test drops")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     out = args.out_dir
@@ -211,7 +241,7 @@ def main():
     sceptic = pd.concat([pd.read_csv(f, index_col=0) for f in args.sceptic_obs]) \
         if args.sceptic_obs else pd.DataFrame()
 
-    all_obs, prec_rows, prec_mod_rows, rank_rows = [], [], [], []
+    all_obs, prec_rows, prec_mod_rows, rank_rows, excl_rows = [], [], [], [], []
     for path in args.h5ads:
         adata = sc.read_h5ad(path)
         if "symbol" not in adata.var:
@@ -324,9 +354,16 @@ def main():
                 if col in prim:
                     r = prim[col].rank(ascending=not hi, method="first")
                     masks[f"{'high' if hi else 'low'}_{col.replace('score_', '')}"] = (r <= k).values
-            for r in rank_test(adata, prim.index, masks, de, args.n_perm):
-                r.update(trajectory=name, species=species)
-                rank_rows.append(r)
+            gsea_p = os.path.join(args.de_dir, f"gsea_{species}_line_vs_primary.csv")
+            excl, terms = prolif_ribo_genes(de, gsea_p, args.exclude_terms_regex,
+                                            modules.get("proliferation", []))
+            print(f"  {name}: no_prolif_ribo drops {len(excl)} genes from {len(terms)} GSEA terms")
+            excl_rows.extend(dict(trajectory=name, gene_id=g, symbol=de.at[g, "symbol"])
+                             for g in sorted(excl))
+            for gene_set, ex in [("all", ()), ("no_prolif_ribo", excl)]:
+                for r in rank_test(adata, prim.index, masks, de, args.n_perm, exclude=ex):
+                    r.update(trajectory=name, species=species, gene_set=gene_set)
+                    rank_rows.append(r)
 
     obs = pd.concat(all_obs)
     obs["sample_type"] = pd.Categorical(obs["sample_type"].astype(str), categories=STAGES)
@@ -382,19 +419,26 @@ def main():
         pr.to_csv(os.path.join(out, "precursors_summary.csv"), index=False)
         print("\nPrecursor candidates in primary culture:\n" + pr.round(3).to_string(index=False))
     if rank_rows:
-        rr = pd.DataFrame(rank_rows)[["trajectory", "species", "candidate_set", "n_cells",
+        rr = pd.DataFrame(rank_rows)[["trajectory", "species", "gene_set", "candidate_set", "n_cells",
                                       "n_eval_genes", "rho", "null_mean", "null_sd", "z", "p_perm"]]
         rr.to_csv(os.path.join(out, "precursor_rank_test.csv"), index=False)
         print("\nRank test vs. pseudobulk line-vs-primary log2FC (non-HVG genes):\n"
               + rr.round(3).to_string(index=False))
-        fig, ax = plt.subplots(figsize=(7, 3.5))
-        sns.barplot(data=rr, x="trajectory", y="z", hue="candidate_set", ax=ax)
-        ax.axhline(0, c="k", lw=0.6)
-        ax.set_ylabel("z vs. random primary-cell sets")
-        ax.set_title("Primary-cell subsets: shift toward the cell-line expression change",
+        pd.DataFrame(excl_rows).to_csv(os.path.join(out, "precursor_rank_test_excluded_genes.csv"),
+                                       index=False)
+        sets = list(rr["gene_set"].unique())
+        fig, axes = plt.subplots(1, len(sets), figsize=(6 * len(sets), 3.5), sharey=True,
+                                 squeeze=False)
+        for ax, gs in zip(axes[0], sets):
+            sns.barplot(data=rr[rr["gene_set"] == gs], x="trajectory", y="z",
+                        hue="candidate_set", ax=ax)
+            ax.axhline(0, c="k", lw=0.6)
+            ax.set_title(f"genes: {gs}", fontsize=9)
+            ax.tick_params(axis="x", rotation=20)
+            ax.legend(fontsize=7)
+        axes[0, 0].set_ylabel("z vs. random primary-cell sets")
+        fig.suptitle("Primary-cell subsets: shift toward the cell-line expression change",
                      fontsize=9)
-        ax.tick_params(axis="x", rotation=20)
-        ax.legend(fontsize=7)
         savefig(fig, os.path.join(out, "precursor_rank_test.pdf"))
     if prec_mod_rows:
         pm = pd.DataFrame(prec_mod_rows)
