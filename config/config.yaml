@@ -433,6 +433,15 @@ de_celltype_min_cells:    20
 de_celltype_downsample:   false   # true = also depth-match within cell types
 de_celltype_time:         "8:00:00"
 
+# Marker-based cell states (rule pseudotime_cell_states; module gene lists in
+# cell_states.py MODULES, or a TSV with columns module, gene). cell_state =
+# identity module with the highest within-trajectory z-score if > min_z;
+# proliferating / immune_active flags at z > flag_z. rule pseudotime_de_state
+# reuses the de_celltype_* settings above with cell_state instead of atlas labels.
+cell_state_markers: ""
+cell_state_min_z:   0.5
+cell_state_flag_z:  1.0
+
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
 # Dmel gene symbols to run offline, or pseudotime_skip_gsea: true.

@@ -284,6 +284,9 @@ rule all:
         "results/pseudotime/de/.done",
         "results/pseudotime/de_downsampled/.done",
         "results/pseudotime/de_celltype/.done",
+        "results/pseudotime/cell_states/.done",
+        "results/pseudotime/de_state/.done",
+        "results/pseudotime/infection/.done",
         "results/pseudotime/composition/.done",
         "results/pseudotime/integrated_with_pseudotime.h5ad",
         # Continuous-trajectory steps (tradeSeq, joint tradeSeq, NMF, pairwise
@@ -1368,6 +1371,108 @@ rule pseudotime_de_celltype:
             --flybase_annotation {params.flybase} \
             --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
             --out_dir results/pseudotime/de_celltype
+        """
+
+# Marker-based cell states (replace the embryo-atlas labels for cultured
+# cells), primary-culture precursors of the cell lines, and DE within
+# marker-defined states. See cell_states.py.
+rule pseudotime_cell_states:
+    input:
+        h5ads   = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        sceptic = expand("results/pseudotime/{group}/sceptic_obs_{group}.csv", group=PT_GROUPS),
+        de      = rules.pseudotime_de.output.flag,
+    output:
+        states = expand("results/pseudotime/cell_states/states_{group}.csv.gz", group=PT_GROUPS),
+        flag   = touch("results/pseudotime/cell_states/.done"),
+    params:
+        script       = "snakemake_scripts/pseudotime/cell_states.py",
+        markers_flag = (f"--markers_tsv {config['cell_state_markers']}"
+                        if config.get("cell_state_markers") else ""),
+        state_min_z  = config.get("cell_state_min_z", 0.5),
+        flag_z       = config.get("cell_state_flag_z", 1.0),
+    log: "logs/pseudotime/cell_states.log"
+    threads: 4
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = "4:00:00",
+        runtime         = _hms_to_min("4:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --sceptic_obs {input.sceptic} --de_dir results/pseudotime/de {params.markers_flag} \
+            --state_min_z {params.state_min_z} --flag_z {params.flag_z} \
+            --out_dir results/pseudotime/cell_states
+        """
+
+rule pseudotime_de_state:
+    input:
+        h5ads  = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        states = rules.pseudotime_cell_states.output.states,
+        ref    = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/de_state/.done"),
+    params:
+        script       = "snakemake_scripts/pseudotime/de_stages.py",
+        min_lineages = config.get("de_celltype_min_lineages", 3),
+        top_n        = config.get("de_celltype_top_n", 3),
+        min_cells    = config.get("de_celltype_min_cells", 20),
+        libs         = " ".join(config.get("pseudotime_gene_set_libraries",
+                                           ["GO_Biological_Process_2018"])),
+        gmt_flag     = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea    = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+        flybase      = config["flybase_annotation"],
+    log: "logs/pseudotime/de_state.log"
+    threads: config.get("de_threads", 8)
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = config.get("de_celltype_time", "8:00:00"),
+        runtime         = _hms_to_min(config.get("de_celltype_time", "8:00:00"))
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --celltype_table {input.states} --celltype_col cell_state --celltypes auto \
+            --celltype_min_lineages {params.min_lineages} --celltype_top_n {params.top_n} \
+            --min_cells {params.min_cells} --reference_dir results/pseudotime/de \
+            --flybase_annotation {params.flybase} \
+            --n_cpus {threads} --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_gsea} \
+            --out_dir results/pseudotime/de_state
+        """
+
+# Wolbachia load and bacterial 16S by stage, and whether the primary-culture
+# immune (AMP) program tracks either. See infection_by_stage.py.
+PT_ALL_SAMPLES = sorted({s for g in PT_GROUPS for s in PT_SAMPLES[g]})
+
+rule pseudotime_infection:
+    input:
+        files  = expand("results/filtered_h5ad/{s}.h5ad", s=PT_ALL_SAMPLES),
+        states = rules.pseudotime_cell_states.output.states,
+        cst    = CONDITION_SAMPLE_TYPE_PATH,
+        lin    = PT_LINEAGES_PATH,
+    output:
+        flag = touch("results/pseudotime/infection/.done"),
+    params:
+        script   = "snakemake_scripts/pseudotime/infection_by_stage.py",
+        species  = " ".join(_host_species(s) for s in PT_ALL_SAMPLES),
+        gtf_dmel = config["host_genome"]["Dmel"]["gtf"],
+        gtf_dsim = config["host_genome"]["Dsim"]["gtf"],
+        gtf_16s  = config.get("sixteen_s_gtf", ""),
+    log: "logs/pseudotime/infection.log"
+    threads: 2
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 64000,
+        slurm_time      = "2:00:00",
+        runtime         = _hms_to_min("2:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --filtered {input.files} \
+            --sample_species {params.species} \
+            --host_gtf_dmel {params.gtf_dmel} --host_gtf_dsim {params.gtf_dsim} \
+            --sixteen_s_gtf {params.gtf_16s} \
+            --condition_sample_type {input.cst} --lineages {input.lin} \
+            --states {input.states} --out_dir results/pseudotime/infection
         """
 
 rule pseudotime_de_concordance:

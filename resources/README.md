@@ -29,3 +29,17 @@ Other files on the same download page (per-timepoint scStereo-seq/scRNA-seq
 objects, germ-layer-split co-embeds, ATAC objects) are listed at
 https://db.cngb.org/stomics/flysta3d-v2/download if a different subset is
 more useful later.
+
+## Tattikota et al. 2020 larval hemocyte atlas
+
+Tattikota et al. 2020, *eLife* 9:e54818 -- *A single-cell survey of Drosophila
+blood*. doi:10.7554/eLife.54818. GEO: GSE146596. No h5ad/loom is published, so
+build one from the GEO sparse matrix + metadata:
+
+```
+cd resources/tattikota2020
+bash download_GSE146596.sh     # ~83 MB
+python build_h5ad.py           # -> tattikota2020_hemocytes.h5ad
+```
+
+Read `GSE146596_metadata-code-book.md.txt.gz` for the obs column definitions.

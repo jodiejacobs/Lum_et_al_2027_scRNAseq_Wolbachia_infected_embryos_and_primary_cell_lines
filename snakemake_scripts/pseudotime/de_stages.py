@@ -82,9 +82,16 @@ CONTRASTS = [("primary_vs_embryo", "primary", "embryo"),
 # Pseudobulk
 # ─────────────────────────────────────────────────────────────────────────────
 
+CELL_TABLE = None   # optional per-cell labels (--celltype_table), joined onto obs
+
+
 def load_cells(path, celltype=None, celltype_col="atlas_annotation", conf_thr=0.5):
     """Trajectory cells of one prepared object, optionally one confident cell type."""
     a = ad.read_h5ad(path)
+    if CELL_TABLE is not None:
+        extra = CELL_TABLE.reindex(a.obs_names)
+        for c in extra.columns:
+            a.obs[c] = extra[c].values
     if celltype is not None:
         keep = a.obs[celltype_col].astype(str) == celltype
         conf = f"{celltype_col}_confidence"
@@ -145,10 +152,13 @@ def choose_celltypes(paths, celltype_col, conf_thr, min_cells, min_lineages, top
     obs = []
     for p in paths:
         o = ad.read_h5ad(p, backed="r").obs
+        if CELL_TABLE is not None:
+            o = o.join(CELL_TABLE, how="left", rsuffix="_tbl")
         conf = f"{celltype_col}_confidence"
         o = o[o[conf] >= conf_thr] if conf in o else o
         obs.append(o[["lineage", "sample_type", celltype_col]].astype(str))
     obs = pd.concat(obs)
+    obs = obs[~obs[celltype_col].isin(["unassigned", "nan", "None", ""])]
     n = obs.groupby([celltype_col, "lineage", "sample_type"]).size().unstack(fill_value=0)
     n = n.reindex(columns=list(STAGE_MAP), fill_value=0)
     n["min_across_stages"] = n[list(STAGE_MAP)].min(axis=1)
@@ -451,6 +461,9 @@ def main():
                    help="run the models within each of these atlas cell types; "
                         "'auto' = pick types present at all stages (see below)")
     p.add_argument("--celltype_col", default="atlas_annotation")
+    p.add_argument("--celltype_table", nargs="*", default=None,
+                   help="per-cell tables (index = cell) holding --celltype_col, e.g. "
+                        "cell_states.py states_<trajectory>.csv.gz")
     p.add_argument("--celltype_conf", type=float, default=0.5)
     p.add_argument("--celltype_min_lineages", type=int, default=3)
     p.add_argument("--celltype_top_n", type=int, default=3)
@@ -467,6 +480,12 @@ def main():
     out = args.out_dir
     os.makedirs(out, exist_ok=True)
     sym = load_flybase_symbols(args.flybase_annotation)
+    global CELL_TABLE
+    if args.celltype_table:
+        CELL_TABLE = pd.concat([pd.read_csv(f, index_col=0, usecols=lambda c: c in
+                                            ("Unnamed: 0", args.celltype_col) or c == "")
+                                for f in args.celltype_table])
+        print(f"Loaded {args.celltype_col} for {len(CELL_TABLE)} cells from --celltype_table")
     if args.downsample_counts:
         print(f"Downsampling every cell to <= {args.downsample_counts} UMIs")
 
