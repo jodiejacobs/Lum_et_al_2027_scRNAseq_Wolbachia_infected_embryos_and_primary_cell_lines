@@ -441,6 +441,12 @@ de_celltype_time:         "8:00:00"
 cell_state_markers: ""
 cell_state_min_z:   0.5
 cell_state_flag_z:  1.0
+# Rank-based precursor test: random primary-cell sets for the null
+precursor_n_perm: 200
+# Expected infection status by condition, where the FASTQ name is misleading.
+# infection_by_stage.py flags samples whose observed Wolbachia signal disagrees.
+infection_status:
+  ubkhc: uninfected   # cell line; "wMel" in the FASTQ names is a labelling mistake
 
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of

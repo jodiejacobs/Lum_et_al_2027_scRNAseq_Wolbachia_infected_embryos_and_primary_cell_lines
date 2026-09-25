@@ -285,7 +285,8 @@ rule all:
         "results/pseudotime/de_downsampled/.done",
         "results/pseudotime/de_celltype/.done",
         "results/pseudotime/cell_states/.done",
-        "results/pseudotime/de_state/.done",
+        # de_state omitted: its auto-picked states (neuroblast/epidermis) are not
+        # meaningful for these data; run it by name if needed
         "results/pseudotime/infection/.done",
         "results/pseudotime/composition/.done",
         "results/pseudotime/integrated_with_pseudotime.h5ad",
@@ -973,9 +974,16 @@ print(f"Pseudotime comparisons: {PT_PAIRS}")
 
 # condition -> lineage lookup (matched embryo -> primary -> line), written
 # on every parse like condition_sample_type.tsv
+def _write_tsv_if_changed(series, path):
+    # rewrite only on change so --rerun-triggers mtime does not rerun downstream rules
+    text = series.to_csv(sep="\t")
+    if not os.path.exists(path) or open(path).read() != text:
+        with open(path, "w") as fh:
+            fh.write(text)
+
 PT_LINEAGES_PATH = "config/pseudotime_lineages.tsv"
-pd.Series(config.get("pseudotime_lineages", {}), name="lineage").rename_axis(
-    "condition").to_csv(PT_LINEAGES_PATH, sep="\t")
+_write_tsv_if_changed(pd.Series(config.get("pseudotime_lineages", {}), name="lineage")
+                      .rename_axis("condition"), PT_LINEAGES_PATH)
 
 def pt_symbiont_gtfs(wildcards):
     strains = {get_symbiont_strain(s) for s in PT_SAMPLES[wildcards.group]}
@@ -1390,6 +1398,7 @@ rule pseudotime_cell_states:
                         if config.get("cell_state_markers") else ""),
         state_min_z  = config.get("cell_state_min_z", 0.5),
         flag_z       = config.get("cell_state_flag_z", 1.0),
+        n_perm       = config.get("precursor_n_perm", 200),
     log: "logs/pseudotime/cell_states.log"
     threads: 4
     resources:
@@ -1402,7 +1411,7 @@ rule pseudotime_cell_states:
         {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
             --sceptic_obs {input.sceptic} --de_dir results/pseudotime/de {params.markers_flag} \
             --state_min_z {params.state_min_z} --flag_z {params.flag_z} \
-            --out_dir results/pseudotime/cell_states
+            --n_perm {params.n_perm} --out_dir results/pseudotime/cell_states
         """
 
 rule pseudotime_de_state:
@@ -1443,6 +1452,10 @@ rule pseudotime_de_state:
 # Wolbachia load and bacterial 16S by stage, and whether the primary-culture
 # immune (AMP) program tracks either. See infection_by_stage.py.
 PT_ALL_SAMPLES = sorted({s for g in PT_GROUPS for s in PT_SAMPLES[g]})
+# expected infection per condition where the FASTQ name is misleading
+PT_INFECTION_PATH = "config/infection_status.tsv"
+_write_tsv_if_changed(pd.Series(config.get("infection_status", {}), name="expected",
+                                dtype=str).rename_axis("condition"), PT_INFECTION_PATH)
 
 rule pseudotime_infection:
     input:
@@ -1450,6 +1463,7 @@ rule pseudotime_infection:
         states = rules.pseudotime_cell_states.output.states,
         cst    = CONDITION_SAMPLE_TYPE_PATH,
         lin    = PT_LINEAGES_PATH,
+        status = PT_INFECTION_PATH,
     output:
         flag = touch("results/pseudotime/infection/.done"),
     params:
@@ -1472,7 +1486,8 @@ rule pseudotime_infection:
             --host_gtf_dmel {params.gtf_dmel} --host_gtf_dsim {params.gtf_dsim} \
             --sixteen_s_gtf {params.gtf_16s} \
             --condition_sample_type {input.cst} --lineages {input.lin} \
-            --states {input.states} --out_dir results/pseudotime/infection
+            --states {input.states} --infection_status {input.status} \
+            --out_dir results/pseudotime/infection
         """
 
 rule pseudotime_de_concordance:

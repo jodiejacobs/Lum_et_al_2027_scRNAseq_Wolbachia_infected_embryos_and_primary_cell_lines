@@ -95,6 +95,10 @@ def main():
     p.add_argument("--lineages", required=True)
     p.add_argument("--sixteen_s_gtf", default=None)
     p.add_argument("--states", nargs="*", default=[], help="cell_states.py states_*.csv.gz")
+    p.add_argument("--infection_status", default=None,
+                   help="TSV: condition<TAB>expected (infected/uninfected); overrides names")
+    p.add_argument("--min_wolbachia_frac", type=float, default=1e-3,
+                   help="sample-level Wolbachia gene UMI fraction called 'infected'")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     out = args.out_dir
@@ -144,6 +148,17 @@ def main():
     summ = pd.DataFrame(rows)
     summ["sample_type"] = pd.Categorical(summ["sample_type"], categories=STAGES + ["unknown"])
     summ = summ.sort_values(["lineage", "sample_type", "sample"])
+    expected = {}
+    if args.infection_status and os.path.getsize(args.infection_status) > 0:
+        expected = pd.read_csv(args.infection_status, sep="\t", index_col=0).iloc[:, 0].to_dict()
+    summ["expected_infection"] = summ["condition"].map(expected).fillna("unspecified")
+    summ["observed_infection"] = np.where(summ["wolbachia_gene_frac"] >= args.min_wolbachia_frac,
+                                          "infected", "uninfected")
+    summ["status_mismatch"] = ((summ["expected_infection"] != "unspecified")
+                               & (summ["expected_infection"] != summ["observed_infection"]))
+    for _, r in summ[summ["status_mismatch"]].iterrows():
+        print(f"WARNING: {r['sample']} expected {r['expected_infection']}, "
+              f"observed {r['observed_infection']} (Wolbachia genes {r['wolbachia_gene_frac']:.2%})")
     summ.to_csv(os.path.join(out, "sample_summary.csv"), index=False)
     print("\n" + summ.drop(columns=["condition"]).round(4).to_string(index=False))
 

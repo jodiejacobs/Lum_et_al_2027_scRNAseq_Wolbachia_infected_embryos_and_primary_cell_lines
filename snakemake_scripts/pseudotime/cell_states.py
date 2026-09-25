@@ -24,6 +24,12 @@ Part 2 -- are there cell-line precursors in the primary culture?
     cell line than to its own culture's average.
   * precursor candidates = primary cells with line_similarity > 0 (or, if
     fewer than --min_candidates, the top --top_frac of primary cells).
+  * Rank test (precursor_rank_test.csv/.pdf): Spearman rho between each
+    candidate set's per-gene shift (vs. the rest of the primary culture) and
+    the pseudobulk line-vs-primary log2FC, on non-HVG genes only (candidates
+    are picked on HVGs, so this avoids circularity), against random
+    primary-cell sets of equal size. Candidate sets: most line-similar, most
+    proliferative, least AMP/immune-active (same size each).
   * Candidates vs other primary cells: module scores (Wilcoxon), state mix,
     SCEPTIC P(cell line), exploratory Wilcoxon marker genes, and overlap of
     those markers with the pseudobulk line-vs-primary up genes (Fisher test).
@@ -44,7 +50,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import mannwhitneyu, fisher_exact
+from scipy.stats import mannwhitneyu, fisher_exact, spearmanr
 from statsmodels.stats.multitest import multipletests
 
 from pt_utils import savefig
@@ -139,6 +145,50 @@ def line_similarity(adata):
     return rowcorr(X, cent["cell_culture"]) - rowcorr(X, cent["primary_cells"])
 
 
+def rank_test(adata, prim_idx, masks, de, n_perm, seed=0):
+    """Does a candidate set's expression shift (vs. the rest of the primary
+    culture) point the same way as the pseudobulk line-vs-primary change,
+    transcriptome-wide? Spearman rho between per-gene mean log-expression
+    difference (candidates - other primary cells) and the DE log2FC, on
+    EVALUATION genes only: genes tested in the DE that are NOT HVGs, because
+    line_similarity (which picks one candidate set) is computed on the HVGs.
+    Null: the same statistic for n_perm random primary-cell sets of equal size."""
+    hv = adata.var["highly_variable"].values if "highly_variable" in adata.var else \
+        np.zeros(adata.n_vars, bool)
+    genes = adata.var_names[~hv].intersection(de.index[de["log2FoldChange"].notna()])
+    if len(genes) < 100:
+        return []
+    cols = adata.var_names.get_indexer(genes)
+    X = adata[prim_idx].X
+    X = X.tocsc()[:, cols] if sp.issparse(X) else sp.csc_matrix(np.asarray(X)[:, cols])
+    X = X.tocsr()
+    tot = np.asarray(X.sum(axis=0)).ravel()
+    n = X.shape[0]
+    lfc = de.loc[genes, "log2FoldChange"].values
+    rng = np.random.default_rng(seed)
+
+    def stat(mask):
+        k = mask.sum()
+        s_in = np.asarray(X[mask].sum(axis=0)).ravel()
+        diff = s_in / k - (tot - s_in) / (n - k)
+        return spearmanr(diff, lfc).correlation
+
+    rows = []
+    for name, mask in masks.items():
+        mask = np.asarray(mask, bool)
+        k = int(mask.sum())
+        if k < 10 or n - k < 10:
+            continue
+        obs_rho = stat(mask)
+        null = np.array([stat(np.isin(np.arange(n), rng.choice(n, k, replace=False)))
+                         for _ in range(n_perm)])
+        rows.append(dict(candidate_set=name, n_cells=k, n_eval_genes=len(genes),
+                         rho=obs_rho, null_mean=null.mean(), null_sd=null.std(ddof=1),
+                         z=(obs_rho - null.mean()) / (null.std(ddof=1) + 1e-12),
+                         p_perm=(1 + (null >= obs_rho).sum()) / (1 + n_perm)))
+    return rows
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -151,6 +201,8 @@ def main():
     p.add_argument("--flag_z", type=float, default=1.0)
     p.add_argument("--min_candidates", type=int, default=30)
     p.add_argument("--top_frac", type=float, default=0.05)
+    p.add_argument("--n_perm", type=int, default=200,
+                   help="random primary-cell sets for the rank-test null")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     out = args.out_dir
@@ -159,7 +211,7 @@ def main():
     sceptic = pd.concat([pd.read_csv(f, index_col=0) for f in args.sceptic_obs]) \
         if args.sceptic_obs else pd.DataFrame()
 
-    all_obs, prec_rows, prec_mod_rows = [], [], []
+    all_obs, prec_rows, prec_mod_rows, rank_rows = [], [], [], []
     for path in args.h5ads:
         adata = sc.read_h5ad(path)
         if "symbol" not in adata.var:
@@ -262,6 +314,20 @@ def main():
                            overlap=len(both), overlap_odds_ratio=orr, overlap_p=fp)
         prec_rows.append(row)
 
+        # transcriptome-wide rank test (evaluation genes disjoint from HVGs)
+        de_p = os.path.join(args.de_dir or "", f"de_{species}_line_vs_primary.csv")
+        if args.de_dir and os.path.exists(de_p):
+            de = pd.read_csv(de_p, index_col=0)
+            k = int(cand.sum())
+            masks = {"line_similarity_top": cand.values}
+            for col, hi in [("score_proliferation", True), ("score_immune_AMP", False)]:
+                if col in prim:
+                    r = prim[col].rank(ascending=not hi, method="first")
+                    masks[f"{'high' if hi else 'low'}_{col.replace('score_', '')}"] = (r <= k).values
+            for r in rank_test(adata, prim.index, masks, de, args.n_perm):
+                r.update(trajectory=name, species=species)
+                rank_rows.append(r)
+
     obs = pd.concat(all_obs)
     obs["sample_type"] = pd.Categorical(obs["sample_type"].astype(str), categories=STAGES)
 
@@ -315,6 +381,21 @@ def main():
         pr = pd.DataFrame(prec_rows)
         pr.to_csv(os.path.join(out, "precursors_summary.csv"), index=False)
         print("\nPrecursor candidates in primary culture:\n" + pr.round(3).to_string(index=False))
+    if rank_rows:
+        rr = pd.DataFrame(rank_rows)[["trajectory", "species", "candidate_set", "n_cells",
+                                      "n_eval_genes", "rho", "null_mean", "null_sd", "z", "p_perm"]]
+        rr.to_csv(os.path.join(out, "precursor_rank_test.csv"), index=False)
+        print("\nRank test vs. pseudobulk line-vs-primary log2FC (non-HVG genes):\n"
+              + rr.round(3).to_string(index=False))
+        fig, ax = plt.subplots(figsize=(7, 3.5))
+        sns.barplot(data=rr, x="trajectory", y="z", hue="candidate_set", ax=ax)
+        ax.axhline(0, c="k", lw=0.6)
+        ax.set_ylabel("z vs. random primary-cell sets")
+        ax.set_title("Primary-cell subsets: shift toward the cell-line expression change",
+                     fontsize=9)
+        ax.tick_params(axis="x", rotation=20)
+        ax.legend(fontsize=7)
+        savefig(fig, os.path.join(out, "precursor_rank_test.pdf"))
     if prec_mod_rows:
         pm = pd.DataFrame(prec_mod_rows)
         pm["padj"] = multipletests(pm["p"], method="fdr_bh")[1]
