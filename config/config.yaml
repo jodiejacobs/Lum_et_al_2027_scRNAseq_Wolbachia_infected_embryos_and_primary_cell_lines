@@ -462,6 +462,18 @@ h3k27me3_beds:
 # fraction of a gene body that must lie in a domain for the gene to count as marked
 h3k27me3_min_cov: 0.5
 
+# Infected line vs uninfected parent line (infected:uninfected, conditions)
+infection_line_pairs: ["Dsim6B-wMel:Dsim6B"]
+
+# H3K27me3 / Polycomb domains (dm6 BED) for the Polycomb-silencing test;
+# label: path. Empty = rule skipped. See resources/h3k27me3/README for sources.
+h3k27me3_beds:
+  embryo_H3K27me3: /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/embryo_H3K27me3.dm6.bed   # GSE49490 enriched regions, lifted from r5
+  BG3_Pc_state:    /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/BG3_Pc.dm6.bed            # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
+  S2_Pc_state:     /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/S2_Pc.dm6.bed             # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
+# fraction of a gene body that must lie in a domain for the gene to count as marked
+h3k27me3_min_cov: 0.5
+
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
 # Dmel gene symbols to run offline, or pseudotime_skip_gsea: true.
