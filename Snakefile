@@ -288,6 +288,9 @@ rule all:
         # de_state omitted: its auto-picked states (neuroblast/epidermis) are not
         # meaningful for these data; run it by name if needed
         "results/pseudotime/infection/.done",
+        "results/pseudotime/infection_de/.done",
+        # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
+        lambda wc: ["results/pseudotime/silencing/.done"] if config.get("h3k27me3_beds") else [],
         "results/pseudotime/composition/.done",
         "results/pseudotime/integrated_with_pseudotime.h5ad",
         # Continuous-trajectory steps (tradeSeq, joint tradeSeq, NMF, pairwise
@@ -1488,6 +1491,60 @@ rule pseudotime_infection:
             --condition_sample_type {input.cst} --lineages {input.lin} \
             --states {input.states} --infection_status {input.status} \
             --out_dir results/pseudotime/infection
+        """
+
+# Infected line vs its uninfected parent line (infection_line_pairs), from the
+# per-sample pseudobulk counts of pseudotime_de. See infection_line_de.py.
+rule pseudotime_infection_de:
+    input:
+        de = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/infection_de/.done"),
+    params:
+        script    = "snakemake_scripts/pseudotime/infection_line_de.py",
+        pairs     = " ".join(config.get("infection_line_pairs", ["Dsim6B-wMel:Dsim6B"])),
+        libs      = " ".join(config.get("pseudotime_gene_set_libraries",
+                                        ["GO_Biological_Process_2018"])),
+        gmt_flag  = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
+    log: "logs/pseudotime/infection_de.log"
+    threads: 4
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 16000,
+        slurm_time      = "2:00:00",
+        runtime         = _hms_to_min("2:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
+            --pairs {params.pairs} --n_cpus {threads} --gene_set_libraries {params.libs} \
+            {params.gmt_flag} {params.skip_gsea} --out_dir results/pseudotime/infection_de
+        """
+
+# Are genes switched off in the lines H3K27me3 (Polycomb) targets? BEDs of
+# H3K27me3 domains (dm6) from config h3k27me3_beds. See silencing_h3k27me3.py.
+rule pseudotime_silencing:
+    input:
+        de   = rules.pseudotime_de.output.flag,
+        beds = lambda wc: list(config.get("h3k27me3_beds", {}).values()),
+    output:
+        flag = touch("results/pseudotime/silencing/.done"),
+    params:
+        script = "snakemake_scripts/pseudotime/silencing_h3k27me3.py",
+        gtf    = config["host_genome"]["Dmel"]["gtf"],
+        beds   = " ".join(f"{k}={v}" for k, v in config.get("h3k27me3_beds", {}).items()),
+        min_cov = config.get("h3k27me3_min_cov", 0.5),
+    log: "logs/pseudotime/silencing.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 16000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
+            --gtf {params.gtf} --beds {params.beds} --min_cov {params.min_cov} \
+            --out_dir results/pseudotime/silencing
         """
 
 rule pseudotime_de_concordance:

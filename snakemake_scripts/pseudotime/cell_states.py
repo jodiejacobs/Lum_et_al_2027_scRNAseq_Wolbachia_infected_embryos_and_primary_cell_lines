@@ -34,6 +34,10 @@ Part 2 -- are there cell-line precursors in the primary culture?
     module and the leading-edge genes of line-up GSEA terms matching
     --exclude_terms_regex (cell cycle, DNA replication, ribosome biogenesis,
     translation, chromatin), so proliferation alone cannot drive rho.
+    Pvr / MAPK (pvr_mapk_by_sample.csv/.pdf): per sample, Spearman rho (raw
+    and controlling for UMI depth) of Pvr and Pvf2 expression with the MAPK
+    target score and the proliferation score; MAPK score in Pvr+ vs Pvr- cells;
+    in primary cultures, Pvr/Pvf2/MAPK in the top --top_frac proliferative cells.
     A third set, "no_prolif_ribo_mito", also drops mitochondrial/respiration
     leading-edge genes and nuclear-encoded OXPHOS genes. Each test also has a
     depth-matched null (z_depth, p_perm_depth; depth_ratio = set/other median UMIs).
@@ -89,7 +93,10 @@ MODULES = {
     "injury_JAK_JNK":    ["upd3", "upd2", "Socs36E", "Mmp1", "puc", "TotA", "TotM"],
     "apoptosis":         ["hid", "rpr", "grim", "Dronc", "p53", "skl"],
     "hemocyte_core":     ["srp", "Pvr", "gcm", "gcm2"],
+    # RTK/MAPK transcriptional feedback targets (Pvr itself excluded)
+    "MAPK_targets":      ["sty", "pnt", "kek1", "Mkp3", "aos", "CG6006"],
 }
+PVR_GENES = ["Pvr", "Pvf1", "Pvf2", "Pvf3"]
 IDENTITY = ["plasmatocyte", "crystal_cell", "lamellocyte", "fat_body", "neural",
             "neuroblast", "muscle", "epidermis", "germline"]
 
@@ -115,6 +122,67 @@ def score_modules(adata, modules, min_genes=3):
         sc.tl.score_genes(adata, ids, score_name=f"score_{m}", random_state=0, use_raw=False)
         used[m] = [g for g in genes if g in s2id.index]
     return used
+
+
+def gene_expr(adata, symbols):
+    """Per-cell log-normalized expression (adata.X) of the given symbols."""
+    sym = pd.Series(adata.var_names, index=adata.var["symbol"].astype(str).values)
+    sym = sym[~sym.index.duplicated()]
+    out = {}
+    for g in symbols:
+        if g in sym.index:
+            x = adata[:, sym[g]].X
+            out[f"expr_{g}"] = np.asarray(x.todense() if sp.issparse(x) else x).ravel()
+    return pd.DataFrame(out, index=adata.obs_names)
+
+
+def partial_spearman(x, y, z):
+    """Spearman rho of x and y after regressing ranks of both on ranks of z."""
+    r = [pd.Series(v).rank().values for v in (x, y, z)]
+    Z = np.c_[np.ones(len(r[2])), r[2]]
+    res = [v - Z @ np.linalg.lstsq(Z, v, rcond=None)[0] for v in r[:2]]
+    return np.corrcoef(*res)[0, 1]
+
+
+def pvr_mapk(obs, top_frac):
+    """Per sample: does Pvr (and Pvf2) track the MAPK-target score and
+    proliferation within cells? rho = Spearman; rho_partial = controlling for
+    log UMI depth. Primary cultures: Pvr / MAPK in the most proliferative
+    top_frac of cells vs the rest."""
+    rows = []
+    depth = np.log1p(obs["n_counts"]) if "n_counts" in obs else None
+    for (traj, st, src), d in obs.groupby(["trajectory", "sample_type", "source_file"],
+                                           observed=True):
+        if len(d) < 50:
+            continue
+        row = dict(trajectory=traj, sample_type=st, sample=src, n_cells=len(d))
+        for x in ["expr_Pvr", "expr_Pvf2"]:
+            if x not in d:
+                continue
+            row[f"frac_{x[5:]}_pos"] = (d[x] > 0).mean()
+            for y in ["score_MAPK_targets", "score_proliferation"]:
+                if y not in d:
+                    continue
+                key = f"{x[5:]}__{y.replace('score_', '')}"
+                row[f"rho_{key}"] = spearmanr(d[x], d[y]).correlation
+                if depth is not None:
+                    row[f"rhopartial_{key}"] = partial_spearman(d[x], d[y], depth[d.index])
+        if {"expr_Pvr", "score_MAPK_targets"} <= set(d):
+            pos = d["expr_Pvr"] > 0
+            if pos.sum() >= 10 and (~pos).sum() >= 10:
+                row["MAPK_Pvrpos_minus_neg"] = (d.loc[pos, "score_MAPK_targets"].mean()
+                                                - d.loc[~pos, "score_MAPK_targets"].mean())
+                row["MAPK_Pvrpos_vs_neg_p"] = mannwhitneyu(d.loc[pos, "score_MAPK_targets"],
+                                                           d.loc[~pos, "score_MAPK_targets"]).pvalue
+        if st == "primary_cells" and "score_proliferation" in d:
+            k = max(10, int(round(top_frac * len(d))))
+            top = d["score_proliferation"].rank(ascending=False, method="first") <= k
+            for x in ["expr_Pvr", "expr_Pvf2", "score_MAPK_targets"]:
+                if x in d:
+                    row[f"{x}_prolifTop_minus_rest"] = d.loc[top, x].mean() - d.loc[~top, x].mean()
+                    row[f"{x}_prolifTop_p"] = mannwhitneyu(d.loc[top, x], d.loc[~top, x]).pvalue
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def call_states(obs, used, state_min_z, flag_z):
@@ -281,6 +349,7 @@ def main():
         used = score_modules(adata, modules)
         obs = call_states(adata.obs.copy(), used, args.state_min_z, args.flag_z)
         obs["trajectory"] = name
+        obs = obs.join(gene_expr(adata, PVR_GENES))
         ls = line_similarity(adata)
         if ls is not None:
             obs["line_similarity"] = ls
@@ -289,7 +358,8 @@ def main():
                            how="left")
         keep = ["trajectory", "species", "lineage", "condition", "sample_type", "source_file",
                 "wolbachia_titer", "cell_state", "proliferating", "immune_active",
-                "line_similarity"] + [c for c in obs if c.startswith(("score_", "z_", "sceptic_"))]
+                "line_similarity", "n_counts"] + \
+            [c for c in obs if c.startswith(("score_", "z_", "sceptic_", "expr_"))]
         obs[[c for c in keep if c in obs]].to_csv(os.path.join(out, f"states_{name}.csv.gz"))
         all_obs.append(obs[[c for c in keep if c in obs]])
 
@@ -478,6 +548,23 @@ def main():
         fig.suptitle("Primary-cell subsets: shift toward the cell-line expression change",
                      fontsize=9)
         savefig(fig, os.path.join(out, "precursor_rank_test.pdf"))
+    pm_ = pvr_mapk(obs, args.top_frac)
+    if len(pm_):
+        pm_.to_csv(os.path.join(out, "pvr_mapk_by_sample.csv"), index=False)
+        print("\nPvr / MAPK targets within samples:\n" + pm_.round(3).to_string(index=False))
+        cols = [c for c in pm_ if c.startswith("rhopartial_")] or \
+            [c for c in pm_ if c.startswith("rho_")]
+        long = pm_.melt(id_vars=["trajectory", "sample_type", "sample"], value_vars=cols,
+                        var_name="pair", value_name="rho")
+        long["pair"] = long["pair"].str.replace("rhopartial_", "").str.replace("rho_", "")
+        g = sns.catplot(data=long, x="sample_type", y="rho", hue="trajectory", col="pair",
+                        kind="strip", order=STAGES, height=3, aspect=0.9, dodge=True, s=7)
+        for ax in g.axes.flat:
+            ax.axhline(0, c="k", lw=0.6)
+            ax.tick_params(axis="x", rotation=30)
+        g.set_ylabels("Spearman rho within sample\n(controlling for depth)")
+        savefig(g.figure, os.path.join(out, "pvr_mapk.pdf"))
+
     if prec_mod_rows:
         pm = pd.DataFrame(prec_mod_rows)
         pm["padj"] = multipletests(pm["p"], method="fdr_bh")[1]
