@@ -1,0 +1,14 @@
+condition	lineage
+JupiterGFP-wMel-embryos	Dmel_JupiterGFP
+wMel_JupiterGFP_primary_cells	Dmel_JupiterGFP
+JW18wMel	Dmel_JupiterGFP
+ubkhc-wMel-embryos	Dmel_Ubkhc
+wMel_Ubkhc_primary_cells	Dmel_Ubkhc
+ubkhc	Dmel_Ubkhc
+Dsim-Merrill23-wRi-embryos	Dsim_Merrill23
+wRi_Merrill23_primary_cells	Dsim_Merrill23
+Dsim-Merrill23	Dsim_Merrill23
+Dsim-w-wRi-embryos	Dsim_w
+wRi_Dsimw-_primary_cells	Dsim_w
+Dsim6B	Dsim_w
+Dsim6B-wMel	Dsim_w
