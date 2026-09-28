@@ -446,9 +446,21 @@ precursor_n_perm: 200
 # Expected infection status by condition, where the FASTQ name is misleading.
 # infection_by_stage.py flags samples whose observed Wolbachia signal disagrees.
 infection_status:
-  ubkhc: uninfected   # cell line; "wMel" in the FASTQ names is a labelling mistake
-  Dsim-Merrill23: uninfected
-  Dsim6B: uninfected
+  ubkhc: uninfected           # derived from a wMel-infected lineage; lost infection in culture
+  Dsim-Merrill23: uninfected  # derived from a wRi-infected lineage; lost infection in culture
+  Dsim6B: uninfected          # from wRi-infected Dsim w- flies; cured with doxycycline
+
+# Infected line vs uninfected parent line (infected:uninfected, conditions)
+infection_line_pairs: ["Dsim6B-wMel:Dsim6B"]
+
+# H3K27me3 / Polycomb domains (dm6 BED) for the Polycomb-silencing test;
+# label: path. Empty = rule skipped. See resources/h3k27me3/README for sources.
+h3k27me3_beds:
+  embryo_H3K27me3: /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/embryo_H3K27me3.dm6.bed   # GSE49490 enriched regions, lifted from r5
+  BG3_Pc_state:    /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/BG3_Pc.dm6.bed            # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
+  S2_Pc_state:     /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/S2_Pc.dm6.bed             # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
+# fraction of a gene body that must lie in a domain for the gene to count as marked
+h3k27me3_min_cov: 0.5
 
 # Cross-species GSEA. Enrichr libraries are fetched with organism "Fly" via
 # gseapy (needs internet on the node); set pseudotime_gmt to a local GMT of
