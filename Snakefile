@@ -289,6 +289,8 @@ rule all:
         # meaningful for these data; run it by name if needed
         "results/pseudotime/infection/.done",
         "results/pseudotime/infection_de/.done",
+        # statistical tests for the atlas-projection claims
+        "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
         lambda wc: ["results/pseudotime/silencing/.done"] if config.get("h3k27me3_beds") else [],
         "results/pseudotime/composition/.done",
@@ -1534,6 +1536,10 @@ rule pseudotime_silencing:
         gtf    = config["host_genome"]["Dmel"]["gtf"],
         beds   = " ".join(f"{k}={v}" for k, v in config.get("h3k27me3_beds", {}).items()),
         min_cov = config.get("h3k27me3_min_cov", 0.5),
+        libs    = " ".join(config.get("pseudotime_gene_set_libraries",
+                                      ["GO_Biological_Process_2018"])),
+        gmt_flag = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_go  = "--skip_go" if config.get("pseudotime_skip_gsea", False) else "",
     log: "logs/pseudotime/silencing.log"
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
@@ -1544,7 +1550,33 @@ rule pseudotime_silencing:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
             --gtf {params.gtf} --beds {params.beds} --min_cov {params.min_cov} \
+            --gene_set_libraries {params.libs} {params.gmt_flag} {params.skip_go} \
             --out_dir results/pseudotime/silencing
+        """
+
+# Tests for the atlas-projection claims (diversity, pseudobulk grouping,
+# tissue specificity, titer), conditions as replicates. See atlas_stats.py.
+rule atlas_stats:
+    input:
+        traj       = rules.embryo_to_cellline_trajectory.output.flag,
+        integrated = rules.integrate.output.integrated,
+    output:
+        flag = touch("results/atlas_stats/.done"),
+    params:
+        script   = "snakemake_scripts/analysis/atlas_stats.py",
+        parents  = " ".join(f"{k}:{v}" for k, v in config.get("atlas_parents", {}).items()),
+        infected = " ".join(config.get("atlas_infected_lines", [])),
+    log: "logs/atlas_stats.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 32000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --traj_dir results/trajectory_analysis \
+            --integrated {input.integrated} --parents {params.parents} \
+            --infected_lines {params.infected} --out_dir results/atlas_stats
         """
 
 rule pseudotime_de_concordance:

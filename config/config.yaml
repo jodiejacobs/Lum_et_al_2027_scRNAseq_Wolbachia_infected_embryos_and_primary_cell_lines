@@ -442,7 +442,7 @@ cell_state_markers: ""
 cell_state_min_z:   0.5
 cell_state_flag_z:  1.0
 # Rank-based precursor test: random primary-cell sets for the null
-precursor_n_perm: 200
+precursor_n_perm: 2000   # smallest possible p = 1/2001
 # Expected infection status by condition, where the FASTQ name is misleading.
 # infection_by_stage.py flags samples whose observed Wolbachia signal disagrees.
 infection_status:
@@ -450,17 +450,14 @@ infection_status:
   Dsim-Merrill23: uninfected  # derived from a wRi-infected lineage; lost infection in culture
   Dsim6B: uninfected          # from wRi-infected Dsim w- flies; cured with doxycycline
 
-# Infected line vs uninfected parent line (infected:uninfected, conditions)
-infection_line_pairs: ["Dsim6B-wMel:Dsim6B"]
-
-# H3K27me3 / Polycomb domains (dm6 BED) for the Polycomb-silencing test;
-# label: path. Empty = rule skipped. See resources/h3k27me3/README for sources.
-h3k27me3_beds:
-  embryo_H3K27me3: /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/embryo_H3K27me3.dm6.bed   # GSE49490 enriched regions, lifted from r5
-  BG3_Pc_state:    /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/BG3_Pc.dm6.bed            # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
-  S2_Pc_state:     /private/groups/russelllab/jodie/scRNAseq/Lum_et_al_2027_scRNAseq_Wolbachia_infected_embryos_and_primary_cell_lines/resources/h3k27me3/S2_Pc.dm6.bed             # Kharchenko 2011 9-state, state 6 (GEP dm6 track)
-# fraction of a gene body that must lie in a domain for the gene to count as marked
-h3k27me3_min_cov: 0.5
+# atlas_stats: each cell line's parental embryo, and the infected cell lines
+atlas_parents:
+  Dsim6B: Dsim-w-wRi-embryos
+  Dsim6B-wMel: Dsim-w-wRi-embryos
+  Dsim-Merrill23: Dsim-Merrill23-wRi-embryos
+  JW18wMel: JupiterGFP-wMel-embryos
+  ubkhc: ubkhc-wMel-embryos
+atlas_infected_lines: ["JW18wMel", "Dsim6B-wMel"]
 
 # Infected line vs uninfected parent line (infected:uninfected, conditions)
 infection_line_pairs: ["Dsim6B-wMel:Dsim6B"]

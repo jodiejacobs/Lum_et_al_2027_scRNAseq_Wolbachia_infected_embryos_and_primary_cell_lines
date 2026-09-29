@@ -23,6 +23,13 @@ Outputs (per BED label)
                                     unchanged; logistic OR for off/down adjusted
                                     for log gene length and primary expression
   h3k27me3_by_lfc.pdf             : fraction marked by line-vs-primary log2FC bin
+  h3k27me3_trend.csv              : trend test among expressed genes with log2FC <= 0:
+                                    logistic marked ~ size of decrease + log length
+                                    + primary expression (OR per log2 unit)
+  go_off_unmarked.csv / go_off_marked.csv : hypergeometric enrichment (BH) of
+                                    off_all_lines genes marked in no map / >= 1 map,
+                                    against expressed genes, using the DE gene-set
+                                    libraries (skipped with --skip_go)
 Positive control printed to the log: fraction of Hox genes marked (should be
 high for embryo H3K27me3; if ~0, check the genome build of the BED).
 """
@@ -94,6 +101,42 @@ def covered_bp(start, end, iv):
     return upto(end) - upto(start)
 
 
+def go_enrichment(t, labels, args):
+    """Hypergeometric enrichment of off_all_lines genes split by Polycomb marking."""
+    from scipy.stats import hypergeom
+    from statsmodels.stats.multitest import multipletests
+    from de_stages import load_gene_sets
+    libs = load_gene_sets(args.gmt, args.gene_set_libraries, args.gene_set_organism)
+    e = t[t["expressed"]]
+    universe = set(e["symbol"].astype(str))
+    n_marks = e[[f"marked_{l}" for l in labels]].sum(axis=1)
+    off = e["category"] == "off_all_lines"
+    for name, sel in [("unmarked", off & (n_marks == 0)), ("marked", off & (n_marks > 0))]:
+        hits = set(e.loc[sel, "symbol"].astype(str))
+        rows = []
+        for lib, gs in libs.items():
+            for term, genes in gs.items():
+                g = set(genes) & universe
+                if not 5 <= len(g) <= 500:
+                    continue
+                k = len(g & hits)
+                if k == 0:
+                    continue
+                rows.append(dict(library=lib, term=term, overlap=k, set_size=len(g),
+                                 n_query=len(hits), n_universe=len(universe),
+                                 fold=(k / len(hits)) / (len(g) / len(universe)),
+                                 p=hypergeom.sf(k - 1, len(universe), len(g), len(hits)),
+                                 genes=";".join(sorted(g & hits))))
+        r = pd.DataFrame(rows)
+        if len(r):
+            r["padj"] = multipletests(r["p"], method="fdr_bh")[1]
+            r = r.sort_values("p")
+        r.to_csv(os.path.join(args.out_dir, f"go_off_{name}.csv"), index=False)
+        print(f"\nGO enrichment, off_all_lines {name} ({len(hits)} genes):\n"
+              + (r.head(10)[["term", "overlap", "fold", "padj"]].round(4).to_string(index=False)
+                 if len(r) else "  none"))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -102,6 +145,10 @@ def main():
     p.add_argument("--beds", nargs="+", required=True, help="label=path.bed")
     p.add_argument("--min_expr", type=float, default=2.0)
     p.add_argument("--min_cov", type=float, default=0.5)
+    p.add_argument("--gene_set_libraries", nargs="*", default=["GO_Biological_Process_2018"])
+    p.add_argument("--gene_set_organism", default="Fly")
+    p.add_argument("--gmt", default=None)
+    p.add_argument("--skip_go", action="store_true")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -173,6 +220,25 @@ def main():
     res.to_csv(os.path.join(args.out_dir, "h3k27me3_enrichment.csv"), index=False)
     print("\n" + res.round(4).to_string(index=False))
     t.drop(columns=["start", "end"]).to_csv(os.path.join(args.out_dir, "gene_marks.csv"))
+
+    # trend: does marking rise with the size of the decrease?
+    e = t[t["expressed"] & (t["lfc"] <= 0)].dropna(subset=["lfc"])
+    trend = []
+    for spec in args.beds:
+        label = spec.split("=", 1)[0]
+        X = sm.add_constant(pd.DataFrame({"decrease": -e["lfc"],
+                                          "log_len": np.log10(e["length"].clip(lower=100)),
+                                          "pri_expr": e["pri_min"]}))
+        fit = sm.Logit(e[f"marked_{label}"].astype(float), X).fit(disp=0)
+        trend.append(dict(bed=label, n_genes=len(e),
+                          OR_per_log2_decrease=float(np.exp(fit.params["decrease"])),
+                          p=float(fit.pvalues["decrease"])))
+    trend = pd.DataFrame(trend)
+    trend.to_csv(os.path.join(args.out_dir, "h3k27me3_trend.csv"), index=False)
+    print("\nTrend (marked ~ size of decrease):\n" + trend.to_string(index=False))
+
+    if not args.skip_go:
+        go_enrichment(t, [s.split("=", 1)[0] for s in args.beds], args)
 
     t = t[t["expressed"]]
     bins = pd.cut(t["lfc"], [-np.inf, -6, -4, -2, -1, -0.5, 0.5, 1, np.inf])

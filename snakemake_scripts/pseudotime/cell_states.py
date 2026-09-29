@@ -34,6 +34,11 @@ Part 2 -- are there cell-line precursors in the primary culture?
     module and the leading-edge genes of line-up GSEA terms matching
     --exclude_terms_regex (cell cycle, DNA replication, ribosome biogenesis,
     translation, chromatin), so proliferation alone cannot drive rho.
+    Composition tests (composition_tests.csv, state_fractions_by_sample.csv):
+    per flag/state, empirical logit of the pooled fraction per lineage and
+    stage, paired t-test across lineages (primary vs embryo, cell line vs
+    primary), BH-adjusted. Rank-test p-values also get BH columns (padj,
+    padj_depth) across the whole table.
     Pvr / MAPK (pvr_mapk_by_sample.csv/.pdf): per sample, Spearman rho (raw
     and controlling for UMI depth) of Pvr and Pvf2 expression with the MAPK
     target score and the proliferation score; MAPK score in Pvr+ vs Pvr- cells;
@@ -183,6 +188,51 @@ def pvr_mapk(obs, top_frac):
                     row[f"{x}_prolifTop_p"] = mannwhitneyu(d.loc[top, x], d.loc[~top, x]).pvalue
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def composition_tests(obs):
+    """Stage effect on the fraction of cells in each flag/state with lineages as
+    replicates: per lineage and stage, empirical logit log((k+0.5)/(n-k+0.5))
+    of the pooled cell counts, then a paired t-test across lineages for
+    primary vs embryo and cell line vs primary (BH-adjusted across all tests).
+    Robust to all-zero groups, unlike a binomial GLM. Returns per-sample
+    fractions and the test table."""
+    from scipy.stats import ttest_rel
+    obs = obs.copy()
+    feats = [f for f in ["proliferating", "immune_active"] if f in obs]
+    for st in sorted(obs["cell_state"].astype(str).unique()):
+        obs[f"state_{st}"] = obs["cell_state"].astype(str) == st
+        feats.append(f"state_{st}")
+    obs[feats] = obs[feats].astype(float)
+    samp = obs.groupby(["trajectory", "sample_type", "source_file"], observed=True)
+    frac = samp[feats].mean()
+    frac["n_cells"] = samp.size()
+    frac = frac.reset_index()
+    lin = obs.groupby(["trajectory", "sample_type"], observed=True)
+    k, n = lin[feats].sum(), lin.size()
+    logit = np.log((k + 0.5) / (k.rsub(n, axis=0) + 0.5))
+    pct = k.div(n, axis=0)
+    rows = []
+    for f in feats:
+        L = logit[f].unstack("sample_type")
+        P = pct[f].unstack("sample_type")
+        for a, b, lab in [("primary_cells", "embryo", "primary_vs_embryo"),
+                          ("cell_culture", "primary_cells", "cell_line_vs_primary")]:
+            if a not in L or b not in L:
+                continue
+            d = L[[a, b]].dropna()
+            if len(d) < 3:
+                continue
+            t = ttest_rel(d[a], d[b])
+            rows.append(dict(feature=f, contrast=lab, n_lineages=len(d),
+                             pct_from=f"{100 * P[b].min():.1f}-{100 * P[b].max():.1f}",
+                             pct_to=f"{100 * P[a].min():.1f}-{100 * P[a].max():.1f}",
+                             mean_log_odds_ratio=float((d[a] - d[b]).mean()),
+                             t=float(t.statistic), p=float(t.pvalue)))
+    res = pd.DataFrame(rows)
+    if len(res):
+        res["padj"] = multipletests(res["p"].fillna(1), method="fdr_bh")[1]
+    return frac, res
 
 
 def call_states(obs, used, state_min_z, flag_z):
@@ -526,6 +576,9 @@ def main():
         rr = rr[[c for c in ["trajectory", "species", "gene_set", "candidate_set", "n_cells",
                              "n_eval_genes", "depth_ratio", "rho", "null_mean", "null_sd", "z",
                              "p_perm", "null_depth_mean", "z_depth", "p_perm_depth"] if c in rr]]
+        for c in ["p_perm", "p_perm_depth"]:  # BH across every rank test in the table
+            if c in rr:
+                rr[c.replace("p_perm", "padj")] = multipletests(rr[c], method="fdr_bh")[1]
         rr.to_csv(os.path.join(out, "precursor_rank_test.csv"), index=False)
         print("\nRank test vs. pseudobulk line-vs-primary log2FC (non-HVG genes):\n"
               + rr.round(3).to_string(index=False))
@@ -548,6 +601,13 @@ def main():
         fig.suptitle("Primary-cell subsets: shift toward the cell-line expression change",
                      fontsize=9)
         savefig(fig, os.path.join(out, "precursor_rank_test.pdf"))
+    frac, ct = composition_tests(obs)
+    frac.round(4).to_csv(os.path.join(out, "state_fractions_by_sample.csv"), index=False)
+    if len(ct):
+        ct.to_csv(os.path.join(out, "composition_tests.csv"), index=False)
+        print("\nStage effects on state/flag fractions (paired t-test on lineage "
+              "logits):\n" + ct.round(4).to_string(index=False))
+
     pm_ = pvr_mapk(obs, args.top_frac)
     if len(pm_):
         pm_.to_csv(os.path.join(out, "pvr_mapk_by_sample.csv"), index=False)
