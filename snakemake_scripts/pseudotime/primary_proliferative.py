@@ -40,6 +40,11 @@ Per primary cell line (one per lineage, from prepared_<lineage>.h5ad):
                           the culture injury/immune program cannot drive the
                           match; label = majority of k embryo neighbours,
                           confidence = vote fraction
+  Also per cell: the shared cell-line signature (genes changing between
+  primary cell line and cell line in the same direction in both species;
+  score = up-gene score minus down-gene score), an OXPHOS score, and the
+  injury/JNK and AMP scores; species_comparison*.csv compare the species
+  (2 lineages each, so descriptive).
   6. GSEA (gsea/): prerank on the Wilcoxon z-scores per lineage and combined
      across lineages (Stouffer), each also without cell-cycle genes;
      gsea_<key>.csv, gsea_nes_heatmap.pdf, combined_ranking.csv
@@ -77,6 +82,24 @@ S_GENES = ["PCNA", "Mcm2", "Mcm3", "Mcm5", "Mcm6", "Mcm7", "Mcm10", "RnrL", "Rnr
            "Orc1", "Cdc6", "E2f1", "CycE", "DNApol-alpha50", "DNApol-alpha73", "Fen1", "RPA2"]
 G2M_GENES = ["CycB", "CycA", "Cdk1", "polo", "aurA", "aurB", "stg", "pav", "feo", "Incenp",
              "BubR1", "cmet", "mad2", "Det", "tum", "sti", "Klp61F", "asp", "Map205", "CycB3"]
+
+
+OXPHOS_REGEX = r"^(?:ND-|COX\d|ATPsyn|UQCR|Cyt-c1|mRp[LS]|SdhA|SdhB|SdhC|SdhD)"
+
+
+def conserved_signature(de_dir):
+    """Genes changing between primary cell line and cell line in the same
+    direction in both species (padj < 0.05 in each): the shared cell-line
+    signature. Returns (up_ids, down_ids)."""
+    f = [os.path.join(de_dir, f"de_{sp}_line_vs_primary.csv") for sp in ("Dmel", "Dsim")]
+    if not all(os.path.exists(x) for x in f):
+        return [], []
+    a, b = (pd.read_csv(x, index_col=0) for x in f)
+    j = a[["log2FoldChange", "padj"]].join(b[["log2FoldChange", "padj"]], lsuffix="_m",
+                                            rsuffix="_s", how="inner").dropna()
+    sig = j[(j.padj_m < 0.05) & (j.padj_s < 0.05)
+            & (np.sign(j.log2FoldChange_m) == np.sign(j.log2FoldChange_s))]
+    return list(sig.index[sig.log2FoldChange_m > 0]), list(sig.index[sig.log2FoldChange_m < 0])
 
 
 def sym_map(adata):
@@ -195,6 +218,17 @@ def analyze(path, args, de_dir):
         sc.tl.score_genes_cell_cycle(prim, s_genes=s_ids, g2m_genes=g_ids, random_state=0)
     prim = embed_primary(prim, args.resolution, args.seed)
     prim.obs["prolif_z"] = zscore(prim.obs["score_proliferation"])
+    # shared cell-line signature (up minus down), OXPHOS and stress scores per cell
+    sig_up, sig_dn = conserved_signature(de_dir)
+    sig_up = [g for g in sig_up if g in prim.var_names]
+    sig_dn = [g for g in sig_dn if g in prim.var_names]
+    if len(sig_up) >= 5 and len(sig_dn) >= 5:
+        sc.tl.score_genes(prim, sig_up, score_name="sig_up", random_state=0, use_raw=False)
+        sc.tl.score_genes(prim, sig_dn, score_name="sig_down", random_state=0, use_raw=False)
+        prim.obs["cellline_signature"] = prim.obs["sig_up"] - prim.obs["sig_down"]
+    ox = [g for g in prim.var_names if re.search(OXPHOS_REGEX, str(sym_map(prim)[g]))]
+    if len(ox) >= 10:
+        sc.tl.score_genes(prim, ox, score_name="score_oxphos", random_state=0, use_raw=False)
 
     # proliferative population
     cz = prim.obs.groupby("pl_leiden", observed=True)["prolif_z"].mean().sort_values(ascending=False)
@@ -219,7 +253,8 @@ def analyze(path, args, de_dir):
     obs["umis"] = np.asarray(C.sum(axis=1)).ravel()
     qrows = []
     for c in ["umis", "genes_detected", "percent_mito", "doublet_score", "prolif_z",
-              "S_score", "G2M_score"]:
+              "S_score", "G2M_score", "cellline_signature", "sig_up", "sig_down",
+              "score_oxphos", "score_injury_JAK_JNK", "score_immune_AMP"]:
         if c in obs:
             a, b = obs.loc[prol, c].astype(float), obs.loc[~prol, c].astype(float)
             ratio = (a.median() / b.median() if c in ("umis", "genes_detected", "percent_mito")
@@ -340,6 +375,12 @@ def analyze(path, args, de_dir):
         ax.set_ylabel("Wolbachia titer"); ax.set_title(name, fontsize=9)
         savefig(fig, os.path.join(out, "wolbachia_violin.pdf"))
 
+    for c in ["cellline_signature", "sig_up", "sig_down", "score_oxphos", "score_injury_JAK_JNK",
+              "score_immune_AMP", "wolbachia_titer"]:
+        if c in obs:  # whole-primary-cell-line medians, for the species comparison
+            obs_c = obs[c].astype(float)
+            sim[f"all_median_{c}"] = float(obs_c.median())
+            sim[f"prolif_median_{c}"] = float(obs_c[prol].median())
     row = dict(lineage=name, species=species, n_primary=int(prim_mask.sum()),
                definition=definition, clusters=";".join(map(str, clusters)),
                n_proliferative=int(prol.sum()), frac_proliferative=float(prol.mean()),
@@ -420,6 +461,17 @@ def main():
             rows.append(r[0]); marks.append(r[1])
     summ = pd.DataFrame(rows)
     summ.to_csv(os.path.join(args.out_dir, "summary.csv"), index=False)
+    # species comparison (lineages are the replicates: 2 per species, descriptive)
+    sp_cols = ["frac_proliferative", "n_proliferative"] + \
+        [c for c in summ if c.startswith(("all_median_", "prolif_median_", "rho_proliferative_line",
+                                          "frac_infected", "median_titer"))]
+    if "species" in summ and len(sp_cols):
+        long = summ[["lineage", "species"] + [c for c in sp_cols if c in summ]]
+        long.to_csv(os.path.join(args.out_dir, "species_comparison_by_lineage.csv"), index=False)
+        agg = long.drop(columns="lineage").groupby("species").agg(["mean", "min", "max"])
+        agg.to_csv(os.path.join(args.out_dir, "species_comparison.csv"))
+        print("\nSpecies comparison (per-lineage values; 2 lineages per species, descriptive):\n"
+              + long.set_index("lineage").T.round(3).to_string())
     print("\n" + summ.T.to_string())
     if marks:
         m = pd.concat(marks)

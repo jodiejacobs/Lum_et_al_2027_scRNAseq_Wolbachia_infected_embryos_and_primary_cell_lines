@@ -290,6 +290,7 @@ rule all:
         "results/pseudotime/infection/.done",
         "results/pseudotime/infection_de/.done",
         "results/pseudotime/primary_proliferative/.done",
+        "results/pseudotime/species_candidates/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1615,6 +1616,30 @@ rule pseudotime_primary_proliferative:
             --cluster_min_z {params.cluster_z} --cell_min_z {params.cell_z} \
             --stable_lfc {params.stable_lfc} --gene_set_libraries {params.libs} \
             {params.gmt_flag} {params.skip_gsea} --out_dir results/pseudotime/primary_proliferative
+        """
+
+# Candidate genes for why Dsim immortalizes more readily: culture-emergent
+# species differences (embryos similar, primary cell lines and cell lines
+# differ), annotated with proliferative-population markers. See species_candidates.py.
+rule pseudotime_species_candidates:
+    input:
+        de      = rules.pseudotime_de.output.flag,
+        prolif  = rules.pseudotime_primary_proliferative.output.flag,
+    output:
+        flag = touch("results/pseudotime/species_candidates/.done"),
+    params:
+        script = "snakemake_scripts/pseudotime/species_candidates.py",
+    log: "logs/pseudotime/species_candidates.log"
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 16000,
+        slurm_time      = "0:30:00",
+        runtime         = _hms_to_min("0:30:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --de_dir results/pseudotime/de \
+            --prolif_dir results/pseudotime/primary_proliferative \
+            --out_dir results/pseudotime/species_candidates
         """
 
 rule pseudotime_de_concordance:
