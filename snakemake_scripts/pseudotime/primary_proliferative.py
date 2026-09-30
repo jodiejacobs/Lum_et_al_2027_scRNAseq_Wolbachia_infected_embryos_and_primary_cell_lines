@@ -40,6 +40,9 @@ Per primary cell line (one per lineage, from prepared_<lineage>.h5ad):
                           the culture injury/immune program cannot drive the
                           match; label = majority of k embryo neighbours,
                           confidence = vote fraction
+  6. GSEA (gsea/): prerank on the Wilcoxon z-scores per lineage and combined
+     across lineages (Stouffer), each also without cell-cycle genes;
+     gsea_<key>.csv, gsea_nes_heatmap.pdf, combined_ranking.csv
 Across lineages (out_dir root):
   summary.csv, consistent_markers.csv (genes up in the proliferative
   population in >= n-1 lineages), wolbachia_summary.csv, origin_summary.csv,
@@ -349,6 +352,45 @@ def analyze(path, args, de_dir):
     return row, mk.assign(lineage=name)
 
 
+def run_gsea(m, args):
+    """GSEA prerank on the Wilcoxon z-scores (proliferative vs rest): per
+    lineage and combined across lineages (Stouffer: sum of z / sqrt(n)), each
+    with and without cell-cycle genes (which are expected by construction)."""
+    from de_stages import load_gene_sets, gsea_all
+    gene_sets = load_gene_sets(args.gmt, args.gene_set_libraries, args.gene_set_organism)
+    if not gene_sets:
+        print("  GSEA skipped: no gene sets loaded"); return
+    gdir = os.path.join(args.out_dir, "gsea")
+    os.makedirs(gdir, exist_ok=True)
+    m = m.dropna(subset=["symbol", "scores"])
+    z = m.pivot_table(index="symbol", columns="lineage", values="scores", aggfunc="first")
+    cc = m.groupby("symbol")["cell_cycle_gene"].first().reindex(z.index).fillna(False).astype(bool)
+    n = z.notna().sum(axis=1)
+    comb = (z.sum(axis=1) / np.sqrt(n))[n >= max(2, z.shape[1] - 1)]
+    pd.DataFrame({"stouffer_z": comb, "n_lineages": n.reindex(comb.index),
+                  "cell_cycle_gene": cc.reindex(comb.index)}).sort_values(
+        "stouffer_z", ascending=False).to_csv(os.path.join(gdir, "combined_ranking.csv"))
+    results = {}
+    for lin in z.columns:
+        s_ = z[lin].dropna()
+        results[f"{lin}"] = pd.DataFrame({"symbol": s_.index, "stat": s_.values})
+        s2 = s_[~cc.reindex(s_.index).values]
+        results[f"{lin}_no_cell_cycle"] = pd.DataFrame({"symbol": s2.index, "stat": s2.values})
+    results["combined"] = pd.DataFrame({"symbol": comb.index, "stat": comb.values})
+    c2 = comb[~cc.reindex(comb.index).values]
+    results["combined_no_cell_cycle"] = pd.DataFrame({"symbol": c2.index, "stat": c2.values})
+    gsea_all(results, gene_sets, gdir, args.gsea_permutations)
+    for key in ["combined", "combined_no_cell_cycle"]:
+        f = os.path.join(gdir, f"gsea_{key}.csv")
+        if os.path.exists(f):
+            g = pd.read_csv(f)
+            g = g[g["FDR q-val"] < 0.05].sort_values("NES", ascending=False)
+            print(f"\nGSEA {key}: {len(g)} terms FDR < 0.05; top up:\n"
+                  + g.head(12)[["Term", "NES", "FDR q-val"]].round(3).to_string(index=False)
+                  + "\ntop down:\n"
+                  + g.tail(8)[["Term", "NES", "FDR q-val"]].round(3).to_string(index=False))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -362,6 +404,11 @@ def main():
     p.add_argument("--k", type=int, default=15)
     p.add_argument("--n_perm", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--gene_set_libraries", nargs="*", default=["GO_Biological_Process_2018"])
+    p.add_argument("--gene_set_organism", default="Fly")
+    p.add_argument("--gmt", default=None)
+    p.add_argument("--gsea_permutations", type=int, default=1000)
+    p.add_argument("--skip_gsea", action="store_true")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -391,6 +438,8 @@ def main():
     summ[wcols].to_csv(os.path.join(args.out_dir, "wolbachia_summary.csv"), index=False)
     ocols = ["lineage"] + [c for c in summ if c.startswith(("atlas_", "embryo_", "n_stable"))]
     summ[ocols].to_csv(os.path.join(args.out_dir, "origin_summary.csv"), index=False)
+    if marks and not args.skip_gsea:
+        run_gsea(pd.concat(marks), args)
     print("Done ->", args.out_dir)
 
 

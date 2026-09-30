@@ -295,11 +295,17 @@ def gsea_all(results, gene_sets, out, permutations, top_terms=25):
         rnk = rnk[~rnk.index.duplicated()].sort_values(ascending=False)
         frames = []
         for lib, gs in gene_sets.items():
-            r = gp.prerank(rnk=rnk, gene_sets=gs, min_size=10, max_size=500,
-                           permutation_num=permutations, seed=42, threads=4,
-                           outdir=None, verbose=False).res2d
+            try:
+                r = gp.prerank(rnk=rnk, gene_sets=gs, min_size=10, max_size=500,
+                               permutation_num=permutations, seed=42, threads=4,
+                               outdir=None, verbose=False).res2d
+            except LookupError as e:  # no gene set passes the size filter
+                print(f"  GSEA {key} / {lib}: skipped ({str(e).splitlines()[0]})")
+                continue
             r["library"] = lib
             frames.append(r)
+        if not frames:
+            continue
         r = pd.concat(frames)
         r["NES"] = pd.to_numeric(r["NES"], errors="coerce")
         r["FDR q-val"] = pd.to_numeric(r["FDR q-val"], errors="coerce")
@@ -307,7 +313,7 @@ def gsea_all(results, gene_sets, out, permutations, top_terms=25):
         nes[key] = r.set_index("Term")["NES"].groupby(level=0).first()
         sig = r.loc[r["FDR q-val"] < 0.25, "Term"]
         nes[key + "__sig"] = pd.Series(True, index=sig.unique())
-    keys = list(results)
+    keys = [k for k in results if k in nes]
     mat = pd.DataFrame({k: nes[k] for k in keys})
     sig_any = pd.concat([nes[k + "__sig"] for k in keys]).index.unique()
     mat = mat.loc[mat.index.intersection(sig_any)]

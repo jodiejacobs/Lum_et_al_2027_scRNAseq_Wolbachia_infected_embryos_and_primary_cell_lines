@@ -1597,6 +1597,10 @@ rule pseudotime_primary_proliferative:
         cluster_z  = config.get("primary_prolif_cluster_min_z", 1.0),
         cell_z     = config.get("primary_prolif_cell_min_z", 1.0),
         stable_lfc = config.get("primary_prolif_stable_lfc", 1.0),
+        libs       = " ".join(config.get("pseudotime_gene_set_libraries",
+                                         ["GO_Biological_Process_2018"])),
+        gmt_flag   = (f"--gmt {config['pseudotime_gmt']}" if config.get("pseudotime_gmt") else ""),
+        skip_gsea  = "--skip_gsea" if config.get("pseudotime_skip_gsea", False) else "",
     log: "logs/pseudotime/primary_proliferative.log"
     threads: 4
     resources:
@@ -1609,7 +1613,8 @@ rule pseudotime_primary_proliferative:
         {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
             --de_dir results/pseudotime/de --resolution {params.resolution} \
             --cluster_min_z {params.cluster_z} --cell_min_z {params.cell_z} \
-            --stable_lfc {params.stable_lfc} --out_dir results/pseudotime/primary_proliferative
+            --stable_lfc {params.stable_lfc} --gene_set_libraries {params.libs} \
+            {params.gmt_flag} {params.skip_gsea} --out_dir results/pseudotime/primary_proliferative
         """
 
 rule pseudotime_de_concordance:
