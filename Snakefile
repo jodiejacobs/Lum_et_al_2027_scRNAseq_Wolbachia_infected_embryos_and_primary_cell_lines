@@ -289,6 +289,7 @@ rule all:
         # meaningful for these data; run it by name if needed
         "results/pseudotime/infection/.done",
         "results/pseudotime/infection_de/.done",
+        "results/pseudotime/primary_proliferative/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1577,6 +1578,36 @@ rule atlas_stats:
         {SCANPY_ENV}/bin/python {params.script} --traj_dir results/trajectory_analysis \
             --integrated {input.integrated} --parents {params.parents} \
             --infected_lines {params.infected} --out_dir results/atlas_stats
+        """
+
+# Cluster each primary cell line alone, find its proliferative population and
+# compare it with the rest: markers, QC, Wolbachia titer, embryonic origin
+# (atlas labels and kNN to the lineage's own embryo on stage-stable genes).
+rule pseudotime_primary_proliferative:
+    input:
+        h5ads = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        de    = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/primary_proliferative/.done"),
+    params:
+        script     = "snakemake_scripts/pseudotime/primary_proliferative.py",
+        resolution = config.get("primary_prolif_resolution", 1.0),
+        cluster_z  = config.get("primary_prolif_cluster_min_z", 1.0),
+        cell_z     = config.get("primary_prolif_cell_min_z", 1.0),
+        stable_lfc = config.get("primary_prolif_stable_lfc", 1.0),
+    log: "logs/pseudotime/primary_proliferative.log"
+    threads: 4
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = config.get("de_mem", 64000),
+        slurm_time      = "4:00:00",
+        runtime         = _hms_to_min("4:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
+            --de_dir results/pseudotime/de --resolution {params.resolution} \
+            --cluster_min_z {params.cluster_z} --cell_min_z {params.cell_z} \
+            --stable_lfc {params.stable_lfc} --out_dir results/pseudotime/primary_proliferative
         """
 
 rule pseudotime_de_concordance:

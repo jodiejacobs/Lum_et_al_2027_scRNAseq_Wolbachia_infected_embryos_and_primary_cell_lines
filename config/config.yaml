@@ -443,6 +443,14 @@ cell_state_min_z:   0.5
 cell_state_flag_z:  1.0
 # Rank-based precursor test: random primary-cell sets for the null
 precursor_n_perm: 2000   # smallest possible p = 1/2001
+# Proliferative population within each primary cell line (primary_proliferative.py):
+# Leiden resolution; clusters with mean proliferation z >= cluster_min_z are the
+# population (cell-level z >= cell_min_z as a cross-check); embryo-origin
+# transfer uses genes with |primary vs embryo log2FC| < stable_lfc
+primary_prolif_resolution: 1.0
+primary_prolif_cluster_min_z: 1.0
+primary_prolif_cell_min_z: 1.0
+primary_prolif_stable_lfc: 1.0
 # Expected infection status by condition, where the FASTQ name is misleading.
 # infection_by_stage.py flags samples whose observed Wolbachia signal disagrees.
 infection_status:
