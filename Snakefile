@@ -1561,6 +1561,7 @@ rule atlas_stats:
     input:
         traj       = rules.embryo_to_cellline_trajectory.output.flag,
         integrated = rules.integrate.output.integrated,
+        cst        = CONDITION_SAMPLE_TYPE_PATH,
     output:
         flag = touch("results/atlas_stats/.done"),
     params:
@@ -1576,7 +1577,8 @@ rule atlas_stats:
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python {params.script} --traj_dir results/trajectory_analysis \
-            --integrated {input.integrated} --parents {params.parents} \
+            --integrated {input.integrated} --condition_sample_type {input.cst} \
+            --parents {params.parents} \
             --infected_lines {params.infected} --out_dir results/atlas_stats
         """
 

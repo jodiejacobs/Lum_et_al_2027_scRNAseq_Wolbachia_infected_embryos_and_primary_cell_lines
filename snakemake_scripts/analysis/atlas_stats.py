@@ -6,6 +6,8 @@ Rule atlas_stats. Statistical tests for the atlas-projection claims, computed
 from the tables written by embryo_to_cellline_trajectory.py (condition level,
 so conditions are the replicates; no per-cell pseudoreplication).
 
+  Stages come from --condition_sample_type; tests 1-3 use embryo and
+  cell-line conditions only (primary cell lines excluded).
   1. diversity_tests.csv       : Shannon entropy, embryos vs cell lines,
                                  exact two-sided Mann-Whitney per label column
   2. correlation_permutation.csv: mean within-group minus between-group
@@ -37,9 +39,20 @@ def mwu(a, b):
                     itertools.combinations(range(len(a) + len(b)), len(a)))))
 
 
-def diversity(traj, out):
+def load_stages(path):
+    """condition -> sample_type (embryo / primary_cells / cell_culture)."""
+    return pd.read_csv(path, sep="\t", index_col=0).iloc[:, 0].astype(str).to_dict()
+
+
+def diversity(traj, out, stages):
     d = pd.read_csv(os.path.join(traj, "diversity_shannon_entropy.csv"))
-    d["is_embryo"] = d["is_embryo"].astype(str).str.lower() == "true"
+    d["stage"] = d["condition"].map(stages)
+    missing = sorted(d.loc[d["stage"].isna(), "condition"].unique())
+    if missing:
+        print(f"  WARNING: no sample_type for {missing}; excluded")
+    # embryo vs cell line only (primary cell lines are not part of this contrast)
+    d = d[d["stage"].isin(["embryo", "cell_culture"])].copy()
+    d["is_embryo"] = d["stage"] == "embryo"
     rows = []
     for col, g in d.groupby("label_col"):
         rows.append(dict(label_col=col, **mwu(g.loc[g.is_embryo, "shannon_entropy"],
@@ -50,8 +63,10 @@ def diversity(traj, out):
     return d
 
 
-def correlation(traj, out, embryos, parents):
+def correlation(traj, out, embryos, lines, parents):
     c = pd.read_csv(os.path.join(traj, "pseudobulk_condition_correlation.csv"), index_col=0)
+    keep = [x for x in c.index if x in set(embryos) | set(lines)]
+    c = c.loc[keep, keep]
     conds = list(c.index)
     iu = np.triu_indices(len(conds), 1)
     vals = c.values[iu]
@@ -84,8 +99,9 @@ def correlation(traj, out, embryos, parents):
     print("\nRank of parental embryo:\n" + pr.round(3).to_string(index=False))
 
 
-def tissue(traj, out, embryos, label="cell_type_tissue"):
+def tissue(traj, out, embryos, lines, label="cell_type_annotation"):
     t = pd.read_csv(os.path.join(traj, f"pseudobulk_vs_tissue_{label}.csv"), index_col=0)
+    t = t.loc[[x for x in t.index if x in set(embryos) | set(lines)]]
     rows = []
     for cond, r in t.iterrows():
         s = r.dropna().sort_values(ascending=False)
@@ -128,16 +144,21 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--traj_dir", required=True, help="embryo_to_cellline_trajectory.py output")
     p.add_argument("--integrated", default=None, help="integrated.h5ad (for titer tests)")
+    p.add_argument("--condition_sample_type", required=True,
+                   help="TSV condition<TAB>sample_type (config/condition_sample_type.tsv)")
     p.add_argument("--parents", nargs="+", default=[], help="cell_line:parental_embryo")
     p.add_argument("--infected_lines", nargs="*", default=[])
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    d = diversity(args.traj_dir, args.out_dir)
+    stages = load_stages(args.condition_sample_type)
+    d = diversity(args.traj_dir, args.out_dir, stages)
     embryos = sorted(d.loc[d.is_embryo, "condition"].unique())
+    lines = sorted(d.loc[~d.is_embryo, "condition"].unique())
+    print(f"embryos: {embryos}\ncell lines: {lines}")
     parents = dict(x.split(":", 1) for x in args.parents)
-    correlation(args.traj_dir, args.out_dir, embryos, parents)
-    tissue(args.traj_dir, args.out_dir, embryos)
+    correlation(args.traj_dir, args.out_dir, embryos, lines, parents)
+    tissue(args.traj_dir, args.out_dir, embryos, lines)
     if args.integrated:
         titer(args.integrated, args.out_dir, embryos, args.infected_lines)
     print("Done ->", args.out_dir)
