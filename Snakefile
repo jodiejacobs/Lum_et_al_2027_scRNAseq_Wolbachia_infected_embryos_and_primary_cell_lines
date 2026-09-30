@@ -291,6 +291,7 @@ rule all:
         "results/pseudotime/infection_de/.done",
         "results/pseudotime/primary_proliferative/.done",
         "results/pseudotime/species_candidates/.done",
+        "results/pseudotime/wolbachia_load/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1768,4 +1769,31 @@ rule count_16s_reads:
             "$SIXTEEN_S" "$TOTAL" "$MAPPED" >> {output.counts}
 
         echo "Done. 16S=$SIXTEEN_S  total=$TOTAL  mapped=$MAPPED"
+        """
+
+
+# Wolbachia load in primary culture vs cell-line-like / proliferative / apoptotic
+# state: between lineages (descriptive) and within each primary cell line.
+# See wolbachia_load_primary.py.
+rule pseudotime_wolbachia_load:
+    input:
+        infection = rules.pseudotime_infection.output.flag,
+        prolif    = rules.pseudotime_primary_proliferative.output.flag,
+    output:
+        flag = touch("results/pseudotime/wolbachia_load/.done"),
+    params:
+        script    = "snakemake_scripts/pseudotime/wolbachia_load_primary.py",
+        min_umis  = config.get("wolbachia_load_min_umis", 5),
+    log: "logs/pseudotime/wolbachia_load.log"
+    threads: 1
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 16000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --infection_dir results/pseudotime/infection \
+            --prolif_dir results/pseudotime/primary_proliferative --min_umis {params.min_umis} \
+            --out_dir results/pseudotime/wolbachia_load
         """

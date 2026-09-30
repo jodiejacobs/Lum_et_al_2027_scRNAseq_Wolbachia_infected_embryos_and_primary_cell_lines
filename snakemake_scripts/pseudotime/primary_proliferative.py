@@ -256,6 +256,7 @@ def analyze(path, args, de_dir):
     cz.rename("mean_prolif_z").to_csv(os.path.join(out, "cluster_proliferation.csv"))
     if prol.sum() < args.min_cells:
         print(f"  only {prol.sum()} proliferative cells (< --min_cells {args.min_cells}); comparisons skipped")
+        prim.obs.assign(proliferative=prol).to_csv(os.path.join(out, "cells.csv.gz"))
         return dict(lineage=name, species=species, n_primary=int(prim_mask.sum()), definition=definition,
                     n_proliferative=int(prol.sum()), frac_proliferative=float(prol.mean()),
                     n_cell_definition=int(cell_def.sum())), None
