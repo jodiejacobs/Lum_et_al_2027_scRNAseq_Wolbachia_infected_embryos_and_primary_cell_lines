@@ -1590,11 +1590,14 @@ rule pseudotime_primary_proliferative:
     input:
         h5ads = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
         de    = rules.pseudotime_de.output.flag,
+        states = rules.pseudotime_cell_states.output.states,
     output:
         flag = touch("results/pseudotime/primary_proliferative/.done"),
     params:
         script     = "snakemake_scripts/pseudotime/primary_proliferative.py",
         resolution = config.get("primary_prolif_resolution", 1.0),
+        definition = config.get("primary_prolif_definition", "shared"),
+        min_cells  = config.get("primary_prolif_min_cells", 50),
         cluster_z  = config.get("primary_prolif_cluster_min_z", 1.0),
         cell_z     = config.get("primary_prolif_cell_min_z", 1.0),
         stable_lfc = config.get("primary_prolif_stable_lfc", 1.0),
@@ -1613,7 +1616,8 @@ rule pseudotime_primary_proliferative:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
             --de_dir results/pseudotime/de --resolution {params.resolution} \
-            --cluster_min_z {params.cluster_z} --cell_min_z {params.cell_z} \
+            --definition {params.definition} --states_dir results/pseudotime/cell_states \
+            --min_cells {params.min_cells} --cluster_min_z {params.cluster_z} --cell_min_z {params.cell_z} \
             --stable_lfc {params.stable_lfc} --gene_set_libraries {params.libs} \
             {params.gmt_flag} {params.skip_gsea} --out_dir results/pseudotime/primary_proliferative
         """

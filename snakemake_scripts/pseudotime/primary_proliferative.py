@@ -11,13 +11,18 @@ Per primary cell line (one per lineage, from prepared_<lineage>.h5ad):
      ribosomal / mito genes excluded, as in prepare_species.py), PCA, kNN,
      Leiden (--resolution), UMAP. Score proliferation (cell_states.MODULES)
      and S / G2M phase (scanpy score_genes_cell_cycle with fly genes).
-  2. Proliferative population, two definitions:
-       cluster : Leiden clusters whose mean proliferation z-score (within this
-                 primary cell line) is >= --cluster_min_z
-       cell    : cells with proliferation z >= --cell_min_z (cross-check;
-                 matches cell_states.py's 'proliferating' flag)
-     The cluster definition is the primary one; if no cluster passes, the
-     cell definition is used and the table says so.
+  2. Proliferative population (--definition):
+       shared (default): cell_states.py's 'proliferating' flag (states_<lineage>.csv.gz
+                 in --states_dir). Its proliferation z-score is computed across
+                 all stages of the lineage, so primary cells are called
+                 proliferating on the same scale as embryos and the cell line.
+       within  : z-scored within this primary cell line only. Leiden clusters
+                 with mean z >= --cluster_min_z, or if none pass, cells with
+                 z >= --cell_min_z. This always returns the top tail of the
+                 primary cell line (~16% at z >= 1) whether or not any cells
+                 are cycling, so use it only as a sensitivity check.
+     Lineages with fewer than --min_cells proliferative cells are reported in
+     summary.csv but skipped for the comparisons below.
   3. What separates them (proliferative vs rest of the same primary cell line;
      markers.csv flags cell-cycle genes, which are expected by construction):
        qc_comparison.csv      : UMIs, genes detected, % mito, doublet score,
@@ -234,7 +239,11 @@ def analyze(path, args, de_dir):
     cz = prim.obs.groupby("pl_leiden", observed=True)["prolif_z"].mean().sort_values(ascending=False)
     clusters = list(cz.index[cz >= args.cluster_min_z])
     cell_def = (prim.obs["prolif_z"] >= args.cell_min_z).values
-    if clusters:
+    if args.definition == "shared":
+        stf = pd.read_csv(os.path.join(args.states_dir, f"states_{name}.csv.gz"), index_col=0)
+        prol = (stf["proliferating"].astype(str) == "True").reindex(prim.obs_names).fillna(False).values
+        definition, clusters = "shared (cell_states proliferating flag)", []
+    elif clusters:
         prol = prim.obs["pl_leiden"].isin(clusters).values
         definition = "cluster"
     else:
@@ -245,6 +254,11 @@ def analyze(path, args, de_dir):
           f"({100 * prol.mean():.1f}%); cell-level definition: {cell_def.sum()} cells; "
           f"overlap {int((prol & cell_def).sum())}")
     cz.rename("mean_prolif_z").to_csv(os.path.join(out, "cluster_proliferation.csv"))
+    if prol.sum() < args.min_cells:
+        print(f"  only {prol.sum()} proliferative cells (< --min_cells {args.min_cells}); comparisons skipped")
+        return dict(lineage=name, species=species, n_primary=int(prim_mask.sum()), definition=definition,
+                    n_proliferative=int(prol.sum()), frac_proliferative=float(prol.mean()),
+                    n_cell_definition=int(cell_def.sum())), None
 
     # 3a. QC
     obs = prim.obs
@@ -438,6 +452,9 @@ def main():
     p.add_argument("--h5ads", nargs="+", required=True)
     p.add_argument("--de_dir", required=True)
     p.add_argument("--resolution", type=float, default=1.0)
+    p.add_argument("--definition", choices=["shared", "within"], default="shared")
+    p.add_argument("--states_dir", default=None, help="cell_states.py output (for --definition shared)")
+    p.add_argument("--min_cells", type=int, default=50)
     p.add_argument("--cluster_min_z", type=float, default=1.0)
     p.add_argument("--cell_min_z", type=float, default=1.0)
     p.add_argument("--stable_lfc", type=float, default=1.0)
@@ -458,7 +475,9 @@ def main():
     for h in args.h5ads:
         r = analyze(h, args, args.de_dir)
         if r:
-            rows.append(r[0]); marks.append(r[1])
+            rows.append(r[0])
+            if r[1] is not None:
+                marks.append(r[1])
     summ = pd.DataFrame(rows)
     summ.to_csv(os.path.join(args.out_dir, "summary.csv"), index=False)
     # species comparison (lineages are the replicates: 2 per species, descriptive)

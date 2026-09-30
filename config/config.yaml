@@ -448,6 +448,10 @@ precursor_n_perm: 2000   # smallest possible p = 1/2001
 # population (cell-level z >= cell_min_z as a cross-check); embryo-origin
 # transfer uses genes with |primary vs embryo log2FC| < stable_lfc
 primary_prolif_resolution: 1.0
+# shared: cell_states 'proliferating' flag (same scale as embryos and cell lines);
+# within: z-scored within the primary cell line (always returns the top tail)
+primary_prolif_definition: shared
+primary_prolif_min_cells: 50
 primary_prolif_cluster_min_z: 1.0
 primary_prolif_cell_min_z: 1.0
 primary_prolif_stable_lfc: 1.0

@@ -117,7 +117,7 @@ def tissue(traj, out, embryos, lines, label="cell_type_annotation"):
     print(tests.round(4).to_string(index=False))
 
 
-def titer(integrated, out, embryos, infected_lines):
+def titer(integrated, out, embryos, infected_lines, stages):
     import anndata as ad
     a = ad.read_h5ad(integrated, backed="r")
     obs = a.obs[["condition", "wolbachia_titer"]].copy()
@@ -128,8 +128,10 @@ def titer(integrated, out, embryos, infected_lines):
     d = pd.DataFrame({"n_cells": obs.groupby("condition").size(), "n_titer_pos": g.size(),
                       "median": g.median(), "q25": g.quantile(0.25), "q75": g.quantile(0.75),
                       "frac_ge_0.9": g.apply(lambda x: (x >= 0.9).mean())})
+    st = np.array([stages.get(c, "") for c in d.index])
     d["group"] = np.where(d.index.isin(embryos), "embryo",
-                          np.where(d.index.isin(infected_lines), "infected_line", "uninfected_line"))
+                 np.where(st == "primary_cells", "primary_cell_line",
+                 np.where(d.index.isin(infected_lines), "infected_line", "uninfected_line")))
     d.to_csv(os.path.join(out, "titer_by_condition.csv"))
     tests = pd.DataFrame([dict(metric=m, **mwu(d.loc[d.group == "embryo", m],
                                                d.loc[d.group == "infected_line", m]))
@@ -160,7 +162,7 @@ def main():
     correlation(args.traj_dir, args.out_dir, embryos, lines, parents)
     tissue(args.traj_dir, args.out_dir, embryos, lines)
     if args.integrated:
-        titer(args.integrated, args.out_dir, embryos, args.infected_lines)
+        titer(args.integrated, args.out_dir, embryos, args.infected_lines, stages)
     print("Done ->", args.out_dir)
 
 
