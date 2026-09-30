@@ -18,6 +18,12 @@ in D. simulans, so it is reported but not tested.
      partial Spearman rho between load and each outcome, controlling for
      log host UMIs, then also for marker-based cell state. BH across all
      tests; combined across lineages by Stouffer z (equal weights).
+     Two load measures: 'frac' (Wolbachia UMIs / all UMIs; Wolbachia / host
+     UMIs gives identical ranks, so identical rho) and 'counts' (Wolbachia UMIs,
+     with log host UMIs as the covariate, so no ratio). With --h5ad_dir, also
+     per-gene log-normalized expression of --genes (default: apoptosis and
+     death-inhibitor genes) from prepared_<lineage>.h5ad, to test whether
+     heavily infected cells express more pro-apoptotic genes.
   3. quintiles.csv / quintiles.pdf : outcomes by within-culture load quintile.
 Caveat: load is a ratio to host UMIs, so cells with less host transcription
 (e.g. quiescent cells) score higher; the host-UMI covariate reduces but does
@@ -57,6 +63,9 @@ def main():
     p.add_argument("--infection_dir", required=True)
     p.add_argument("--prolif_dir", required=True)
     p.add_argument("--min_umis", type=int, default=5)
+    p.add_argument("--h5ad_dir", default=None, help="results/pseudotime (prepared_<lineage>.h5ad)")
+    p.add_argument("--genes", nargs="*", default=["rpr", "W", "grim", "skl", "Buffy", "Debcl", "th",
+                                                  "Diap2", "Dronc", "Drice", "Dcp-1", "p53", "puc"])
     p.add_argument("--out_dir", required=True)
     a = p.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
@@ -84,16 +93,27 @@ def main():
             extra = pd.read_csv(f, index_col=0)
             d = d.join(extra[[c for c in ["cellline_signature", "sig_up", "sig_down", "score_oxphos"]
                               if c in extra]], how="left")
+        genes = []
+        if a.h5ad_dir:
+            import anndata as ad
+            from cell_states import gene_expr
+            h = ad.read_h5ad(os.path.join(a.h5ad_dir, lin, f"prepared_{lin}.h5ad"))
+            ge = gene_expr(h[h.obs_names.isin(d.index)], a.genes)
+            d = d.join(ge, how="left")
+            genes = list(ge.columns)
+            del h
         ld = np.log(d["host_umis"].values)[:, None]
         st = pd.get_dummies(d["cell_state"], drop_first=True).values.astype(float)
-        for y in [o for o in OUTCOMES if o in d]:
-            v = d[y].astype(float).values
-            ok = ~np.isnan(v)
-            r1, p1, z1 = partial_spearman(v[ok], d["load"].values[ok], ld[ok])
-            r2, p2, z2 = partial_spearman(v[ok], d["load"].values[ok], np.column_stack([ld, st])[ok])
-            rows.append(dict(lineage=lin, species=d["species"].iloc[0], outcome=y, n=int(ok.sum()),
-                             rho_host_umis=r1, p_host_umis=p1, z_host_umis=z1,
-                             rho_host_umis_state=r2, p_host_umis_state=p2, z_host_umis_state=z2))
+        for measure, x in [("frac", d["load"].values), ("counts", d["wolbachia_umis"].values)]:
+            for y in [o for o in OUTCOMES if o in d] + genes:
+                v = d[y].astype(float).values
+                ok = ~np.isnan(v)
+                r1, p1, z1 = partial_spearman(v[ok], x[ok], ld[ok])
+                r2, p2, z2 = partial_spearman(v[ok], x[ok], np.column_stack([ld, st])[ok])
+                rows.append(dict(lineage=lin, species=d["species"].iloc[0], load_measure=measure,
+                                 outcome=y, n=int(ok.sum()), frac_expressing=float((v[ok] > 0).mean()),
+                                 rho_host_umis=r1, p_host_umis=p1, z_host_umis=z1,
+                                 rho_host_umis_state=r2, p_host_umis_state=p2, z_host_umis_state=z2))
         q = pd.qcut(d["load"].rank(method="first"), 5, labels=[1, 2, 3, 4, 5])
         qq = d.groupby(q, observed=True).agg(median_load=("load", "median"),
                                               pct_proliferating=("proliferating", lambda v: 100 * v.mean()),
@@ -108,7 +128,7 @@ def main():
     w = pd.DataFrame(rows)
     for k in ["host_umis", "host_umis_state"]:
         w[f"padj_{k}"] = multipletests(w[f"p_{k}"], method="fdr_bh")[1]
-    comb = w.groupby("outcome").agg(
+    comb = w.groupby(["load_measure", "outcome"]).agg(
         n_lineages=("lineage", "size"),
         n_positive=("rho_host_umis_state", lambda v: int((v > 0).sum())),
         rho_min=("rho_host_umis_state", "min"), rho_max=("rho_host_umis_state", "max"),

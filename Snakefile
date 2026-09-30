@@ -1779,6 +1779,7 @@ rule pseudotime_wolbachia_load:
     input:
         infection = rules.pseudotime_infection.output.flag,
         prolif    = rules.pseudotime_primary_proliferative.output.flag,
+        h5ads     = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
     output:
         flag = touch("results/pseudotime/wolbachia_load/.done"),
     params:
@@ -1788,12 +1789,13 @@ rule pseudotime_wolbachia_load:
     threads: 1
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
-        mem_mb          = 16000,
+        mem_mb          = 32000,
         slurm_time      = "1:00:00",
         runtime         = _hms_to_min("1:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python {params.script} --infection_dir results/pseudotime/infection \
             --prolif_dir results/pseudotime/primary_proliferative --min_umis {params.min_umis} \
+            --h5ad_dir results/pseudotime \
             --out_dir results/pseudotime/wolbachia_load
         """
