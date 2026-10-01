@@ -292,6 +292,7 @@ rule all:
         "results/pseudotime/primary_proliferative/.done",
         "results/pseudotime/species_candidates/.done",
         "results/pseudotime/wolbachia_load/.done",
+        "results/pseudotime/wolbachia_states/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1798,4 +1799,42 @@ rule pseudotime_wolbachia_load:
             --prolif_dir results/pseudotime/primary_proliferative --min_umis {params.min_umis} \
             --h5ad_dir results/pseudotime \
             --out_dir results/pseudotime/wolbachia_load
+        """
+
+
+# Wolbachia load vs immortalization-relevant cell states (dividing, cell-line-like,
+# death-resistant). States are defined from host genes only and written before
+# any Wolbachia data are read. See wolbachia_target_states.py.
+rule pseudotime_wolbachia_states:
+    input:
+        h5ads     = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        states    = rules.pseudotime_cell_states.output.states,
+        infection = rules.pseudotime_infection.output.flag,
+        inf_de    = rules.pseudotime_infection_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/wolbachia_states/.done"),
+    params:
+        script     = "snakemake_scripts/pseudotime/wolbachia_target_states.py",
+        groups     = " ".join(PT_GROUPS),
+        n_null     = config.get("wolbachia_states_n_null", 100),
+        div_z      = config.get("wolbachia_states_div_z", 3.0),
+        downsample = config.get("wolbachia_states_downsample", 2000),
+        wol_lfc    = config.get("wolbachia_states_wol_de_lfc", 1.0),
+        min_cells  = config.get("wolbachia_states_min_cells", 50),
+    log: "logs/pseudotime/wolbachia_states.log"
+    threads: 4
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 64000,
+        slurm_time      = "3:00:00",
+        runtime         = _hms_to_min("3:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ad_dir results/pseudotime \\
+            --lineages {params.groups} --infection_dir results/pseudotime/infection \\
+            --infection_de results/pseudotime/infection_de/de_Dsim6B-wMel_vs_Dsim6B.csv \\
+            --cell_states_dir results/pseudotime/cell_states --n_null {params.n_null} \\
+            --div_z {params.div_z} --downsample {params.downsample} \\
+            --wol_de_lfc {params.wol_lfc} --min_cells {params.min_cells} \\
+            --out_dir results/pseudotime/wolbachia_states
         """

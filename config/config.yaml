@@ -489,3 +489,10 @@ h3k27me3_min_cov: 0.5
 pseudotime_gene_set_libraries: ["GO_Biological_Process_2018", "KEGG_2019"]
 pseudotime_gmt:       ""
 pseudotime_skip_gsea: false
+
+# Wolbachia load vs immortalization-relevant states (rule pseudotime_wolbachia_states)
+wolbachia_states_n_null:     100    # expression-matched random gene sets per cell-cycle score
+wolbachia_states_div_z:      3.0    # dividing = S or G2/M score z >= this vs the null
+wolbachia_states_downsample: 2000   # UMIs per cell before the line-vs-primary classifier
+wolbachia_states_wol_de_lfc: 1.0    # Wolbachia-responsive genes excluded: Dsim6B-wMel vs Dsim6B |log2FC| >= this
+wolbachia_states_min_cells:  50
