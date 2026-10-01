@@ -64,7 +64,7 @@ def main():
     p.add_argument("--prolif_dir", required=True)
     p.add_argument("--min_umis", type=int, default=5)
     p.add_argument("--h5ad_dir", default=None, help="results/pseudotime (prepared_<lineage>.h5ad)")
-    p.add_argument("--genes", nargs="*", default=["rpr", "W", "grim", "skl", "Buffy", "Debcl", "th",
+    p.add_argument("--genes", nargs="*", default=["rpr", "hid", "grim", "skl", "Buffy", "Debcl", "Diap1",
                                                   "Diap2", "Dronc", "Drice", "Dcp-1", "p53", "puc"])
     p.add_argument("--out_dir", required=True)
     a = p.parse_args()
