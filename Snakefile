@@ -294,6 +294,7 @@ rule all:
         "results/pseudotime/wolbachia_load/.done",
         "results/pseudotime/wolbachia_states/.done",
         "results/pseudotime/culture_stress/.done",
+        "results/pseudotime/rtk_switch/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1869,4 +1870,40 @@ rule pseudotime_culture_stress:
             --de_dir results/pseudotime/de \\
             --infection_de results/pseudotime/infection_de/de_Dsim6B-wMel_vs_Dsim6B.csv \\
             --out_dir results/pseudotime/culture_stress
+        """
+
+
+# Egfr -> Pvr receptor switch from embryo to primary culture to cell line:
+# stage shift, ligand/autocrine co-expression, identity of Pvr+ cells, overlap
+# with the proliferative population, MAPK readout, species contrast, and
+# Wolbachia UMIs vs the switch. See rtk_switch.py.
+rule pseudotime_rtk_switch:
+    input:
+        h5ads     = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        states    = rules.pseudotime_cell_states.output.states,
+        prolif    = rules.pseudotime_primary_proliferative.output.flag,
+        infection = rules.pseudotime_infection.output.flag,
+        inf_de    = rules.pseudotime_infection_de.output.flag,
+        de        = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/rtk_switch/.done"),
+    params:
+        script  = "snakemake_scripts/pseudotime/rtk_switch.py",
+        groups  = " ".join(PT_GROUPS),
+        min_wol = config.get("wolbachia_load_min_umis", 5),
+    log: "logs/pseudotime/rtk_switch.log"
+    threads: 2
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 48000,
+        slurm_time      = "3:00:00",
+        runtime         = _hms_to_min("3:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ad_dir results/pseudotime \\
+            --lineages {params.groups} --states_dir results/pseudotime/cell_states \\
+            --prolif_dir results/pseudotime/primary_proliferative \\
+            --infection_dir results/pseudotime/infection --de_dir results/pseudotime/de \\
+            --infection_de results/pseudotime/infection_de/de_Dsim6B-wMel_vs_Dsim6B.csv \\
+            --min_wol {params.min_wol} --out_dir results/pseudotime/rtk_switch
         """
