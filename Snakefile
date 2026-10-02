@@ -293,6 +293,7 @@ rule all:
         "results/pseudotime/species_candidates/.done",
         "results/pseudotime/wolbachia_load/.done",
         "results/pseudotime/wolbachia_states/.done",
+        "results/pseudotime/culture_stress/.done",
         # statistical tests for the atlas-projection claims
         "results/atlas_stats/.done",
         # H3K27me3 overlap only when BEDs are configured (h3k27me3_beds)
@@ -1837,4 +1838,35 @@ rule pseudotime_wolbachia_states:
             --div_z {params.div_z} --downsample {params.downsample} \\
             --wol_de_lfc {params.wol_lfc} --min_cells {params.min_cells} \\
             --out_dir results/pseudotime/wolbachia_states
+        """
+
+
+# Culture-level stabilization: injury/immune, redox (NRF2), iron/heme and
+# starvation programs from embryo to primary culture vs Wolbachia load, within
+# cultures, and infected vs cured cell line. See culture_stress.py.
+rule pseudotime_culture_stress:
+    input:
+        h5ads     = expand("results/pseudotime/{group}/prepared_{group}.h5ad", group=PT_GROUPS),
+        infection = rules.pseudotime_infection.output.flag,
+        inf_de    = rules.pseudotime_infection_de.output.flag,
+        de        = rules.pseudotime_de.output.flag,
+    output:
+        flag = touch("results/pseudotime/culture_stress/.done"),
+    params:
+        script = "snakemake_scripts/pseudotime/culture_stress.py",
+        groups = " ".join(PT_GROUPS),
+    log: "logs/pseudotime/culture_stress.log"
+    threads: 2
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 48000,
+        slurm_time      = "2:00:00",
+        runtime         = _hms_to_min("2:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python {params.script} --h5ad_dir results/pseudotime \\
+            --lineages {params.groups} --infection_dir results/pseudotime/infection \\
+            --de_dir results/pseudotime/de \\
+            --infection_de results/pseudotime/infection_de/de_Dsim6B-wMel_vs_Dsim6B.csv \\
+            --out_dir results/pseudotime/culture_stress
         """
