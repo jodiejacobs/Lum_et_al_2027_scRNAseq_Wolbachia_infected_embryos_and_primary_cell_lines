@@ -26,7 +26,8 @@ Questions (Q) and outputs (out_dir):
                                             NaN under separation) and raw Haldane OR
                    lr_by_state.csv          sender state x receiver state mean-product
                                             score per ligand-receptor pair,
-                                            permutation p (state labels shuffled)
+                                            permutation p (state labels shuffled,
+                                            --n_perm, default 2000)
   Q3 identity      identity.csv             identity module z in Pvr_only vs Egfr_only
                                             and Pvr+ vs Pvr- cells per sample (MWU)
                    identity_states.csv      receptor class x cell_state (cell_states.py)
@@ -39,6 +40,7 @@ Questions (Q) and outputs (out_dir):
   Q5 MAPK          mapk.csv                 MAPK-target score by receptor class;
                                             partial Spearman of Egfr, Pvr and aos
                                             (EGFR-biased target) with MAPK score
+                                            (aos vs MAPK_no_aos, to avoid circularity)
   Q6 species       species_switch.csv       per lineage: Egfr retained into primary
                                             (CPM ratio) and log2 Pvr/Egfr per stage
                    species_de.csv           panel genes from the stage DE and
@@ -93,6 +95,7 @@ MODULES_RTK = {
     "EGFR_ligand": LIGANDS["Egfr"],
     "EGFR_processing": ["rho", "ru", "S"],
     "MAPK_targets": MODULES["MAPK_targets"],
+    "MAPK_no_aos": [g for g in MODULES["MAPK_targets"] if g != "aos"],
     "proliferation": MODULES["proliferation"],
     "plasmatocyte": MODULES["plasmatocyte"],
     "crystal_cell": MODULES["crystal_cell"],
@@ -150,13 +153,13 @@ def mwu_p(a, b, min_n=10):
 def lr_scores(X, labels, states, n_perm, rng):
     """Mean-product ligand-receptor scores, sender x receiver, with permutation p.
     X: cells x 2 (ligand, receptor)."""
-    def means(lab):
-        return np.vstack([X[lab == s].mean(0) for s in states])   # states x 2
-    m = means(labels)
+    M = (np.asarray(labels)[:, None] == np.asarray(states)[None, :]).astype(float)
+    M /= M.sum(0)                                   # cells x states, column means
+    m = M.T @ X                                     # states x 2
     obs = np.outer(m[:, 0], m[:, 1])
     ge = np.zeros_like(obs)
-    for _ in range(n_perm):
-        mp = means(rng.permutation(labels))
+    for _ in range(n_perm):                         # shuffling cells = shuffling labels
+        mp = M.T @ X[rng.permutation(len(X))]
         ge += np.outer(mp[:, 0], mp[:, 1]) >= obs
     return obs, (ge + 1) / (n_perm + 1)
 
@@ -246,7 +249,7 @@ def main():
     p.add_argument("--infection_de", required=True)
     p.add_argument("--min_wol", type=float, default=5)
     p.add_argument("--min_cells", type=int, default=20)
-    p.add_argument("--n_perm", type=int, default=200)
+    p.add_argument("--n_perm", type=int, default=2000)
     p.add_argument("--n_boot", type=int, default=500)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out_dir", required=True)
@@ -409,9 +412,11 @@ def main():
         r["p_MAPK_Pvr_only_vs_neither"] = mwu_p(d.loc[d.receptor_class == "Pvr_only", "MAPK_targets"].values,
                                                 d.loc[d.receptor_class == "neither", "MAPK_targets"].values)
         for g in ["expr_Egfr", "expr_Pvr", "expr_aos"]:
+            # aos is in MAPK_targets, so test it against the score without aos
+            score = "MAPK_no_aos" if g == "expr_aos" and "MAPK_no_aos" in d else "MAPK_targets"
             if g in d:
                 r[f"rho_{g}_MAPK"], r[f"p_{g}_MAPK"] = partial_spearman(
-                    d[g].values, d["MAPK_targets"].values, d["log_host"].values)
+                    d[g].values, d[score].values, d["log_host"].values)
         mk.append(r)
     pd.DataFrame(mk).to_csv(out("mapk.csv"), index=False)
     print("\nQ5 MAPK:\n" + pd.DataFrame(mk).round(3).to_string(index=False))
