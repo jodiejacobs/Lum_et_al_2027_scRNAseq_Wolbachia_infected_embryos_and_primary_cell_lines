@@ -1,4 +1,5 @@
 # Files and Directories to ignore
+notes/
 results/
 config/condition_sample_type.tsv  # regenerated from samples.csv on every Snakefile parse
 blast_db/
