@@ -334,10 +334,50 @@ ruleorder: map_pipseq > combine_files_by_condition_platform
 ruleorder: map_10x > combine_files_by_condition_platform
 
 # Process PIPseq samples with kallisto bustools
+# PIPseq R1 is [0-4 bp stagger][cb1 8][ATG][cb2 6][GAG][cb3 6][TCGAG][cb4 8]
+# [UMI 12][polyT] (confirmed on the T20 runs: ~91% of reads match, stagger
+# spread over 0-3 bp). kallisto's -x needs fixed coordinates, so R1 is first
+# rewritten to [cb1-4 = 28 bp][UMI 12]; pairs without a linker match are
+# dropped. The previous -x 0,0,16:0,16,28 read barcode/UMI at fixed offsets
+# and mis-assigned cells for every PIPseq sample.
+rule pipseq_extract_barcodes:
+    input:
+        r1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
+        r2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1]
+    output:
+        r1 = temp("results/pipseq_fastq/{sample_id}_R1.fastq.gz"),
+        r2 = temp("results/pipseq_fastq/{sample_id}_R2.fastq.gz"),
+        stats = "results/pipseq_fastq/{sample_id}_barcode_stats.json"
+    wildcard_constraints:
+        sample_id = ".*_pipseq"
+    params:
+        script = "snakemake_scripts/alignment/pipseq_extract_barcodes.py"
+    log:
+        "logs/pipseq_extract_barcodes/{sample_id}.log"
+    threads: 8
+    resources:
+        slurm_partition = "long",
+        mem_mb = 8000,
+        slurm_time = "24:00:00"
+    shell:
+        """
+        exec > {log} 2>&1
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {KALLISTO_ENV}
+        set -u
+
+        python {params.script} \
+            --r1 {input.r1} --r2 {input.r2} \
+            --out-r1 {output.r1} --out-r2 {output.r2} \
+            --log {output.stats} --threads {threads}
+        cat {output.stats}
+        """
+
 rule map_pipseq:
     input:
-        read1 = lambda wildcards: get_fastq_files(wildcards.sample_id)[0],
-        read2 = lambda wildcards: get_fastq_files(wildcards.sample_id)[1],
+        read1 = "results/pipseq_fastq/{sample_id}_R1.fastq.gz",
+        read2 = "results/pipseq_fastq/{sample_id}_R2.fastq.gz",
         kallisto_index = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "index.idx"),
         transcripts_to_genes = lambda wildcards: os.path.join(config[get_genome(wildcards.sample_id)], "t2g.txt")
     output:
@@ -375,7 +415,7 @@ rule map_pipseq:
             -i {input.kallisto_index} \
             --keep-tmp \
             -g {input.transcripts_to_genes} \
-            -x 0,0,16:0,16,28:1,0,0 \
+            -x 0,0,28:0,28,40:1,0,0 \
             -o {params.outdir} \
             -t {threads} \
             --h5ad \
