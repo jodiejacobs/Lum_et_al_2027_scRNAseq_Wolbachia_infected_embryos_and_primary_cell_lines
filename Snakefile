@@ -442,6 +442,50 @@ rule map_10x:
         echo "10x processing complete for {params.sample_id}"
         """
 
+# Library complexity: per-sample sequencing saturation and a downsampling
+# curve (UMIs/cell vs reads/cell) from the kb BUS file. Not in rule all;
+# run with `snakemake library_saturation`.
+rule bus_saturation:
+    input:
+        bus = lambda wildcards: "results/{}/{}/output.unfiltered.bus".format(
+            wildcards.sample_id.rsplit("_", 1)[1], wildcards.sample_id)
+    output:
+        summary = "results/qc/saturation/{sample_id}.summary.tsv",
+        curve = "results/qc/saturation/{sample_id}.curve.tsv"
+    wildcard_constraints:
+        sample_id = "|".join(SAMPLE_IDS)
+    params:
+        script = "snakemake_scripts/quality_control/bus_saturation.py",
+        min_umis = config.get("saturation_min_umis", 500)
+    log:
+        "logs/bus_saturation/{sample_id}.log"
+    resources:
+        mem_mb = 32000,
+        slurm_time = "2:00:00"
+    shell:
+        """
+        exec 2> {log}
+        set +u
+        source {CONDA_BASE}/etc/profile.d/conda.sh
+        conda activate {KALLISTO_ENV}
+        set -u
+
+        bustools text -p {input.bus} | \
+            python {params.script} \
+                --sample {wildcards.sample_id} \
+                --min-umis {params.min_umis} \
+                --summary {output.summary} \
+                --curve {output.curve}
+        """
+
+rule library_saturation:
+    input:
+        expand("results/qc/saturation/{sample_id}.summary.tsv", sample_id=SAMPLE_IDS)
+    output:
+        "results/qc/saturation/all_samples.summary.tsv"
+    shell:
+        "awk 'FNR==1 && NR!=1 {{next}} 1' {input} > {output}"
+
 # Filter h5ad output and output qc:
 rule filter_h5ad:
     input:
