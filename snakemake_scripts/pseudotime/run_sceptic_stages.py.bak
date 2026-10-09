@@ -182,8 +182,8 @@ def plot_identity(obs, fig_dir, species, n_bins, conf_thr, top_n=12, min_cells=2
         df[label] = np.where(df[label].isin(top), df[label], "other")
         edges = np.linspace(0, 2, n_bins + 1)
         centers = (edges[:-1] + edges[1:]) / 2
-        df["bin"] = pd.cut(df["sceptic_pseudotime"].clip(0, 2), bins=edges,
-                           labels=False, include_lowest=True)
+        df["bin"] = pd.cut(df["sceptic_pseudotime"], bins=edges, labels=False,
+                           include_lowest=True)
         frac = (df.groupby(["bin", label]).size().unstack(fill_value=0)
                 .reindex(range(n_bins), fill_value=0))
         n_per_bin = frac.sum(axis=1)
@@ -208,7 +208,8 @@ def plot_identity(obs, fig_dir, species, n_bins, conf_thr, top_n=12, min_cells=2
 
         if conf in obs:
             d = obs[["sceptic_pseudotime", conf, "lineage"]].copy()
-            d["bin_center"] = centers[df["bin"].to_numpy(dtype=int)]
+            d["bin_center"] = centers[pd.cut(d["sceptic_pseudotime"], bins=edges,
+                                             labels=False, include_lowest=True)]
             fig, ax = plt.subplots(figsize=(7, 4))
             sns.lineplot(data=d, x="bin_center", y=conf, hue="lineage",
                          errorbar="sd", marker="o", ax=ax)
