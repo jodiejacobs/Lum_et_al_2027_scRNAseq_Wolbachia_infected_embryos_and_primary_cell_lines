@@ -32,12 +32,19 @@ with the AMP score is the more informative readout than totals.
 
 import os
 import re
+import json
+import time
 import argparse
 
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import anndata as ad
+import h5py
+try:
+    from anndata.io import read_elem
+except ImportError:
+    from anndata.experimental import read_elem
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -83,6 +90,77 @@ def sixteen_s_labels(path):
     return lab
 
 
+def read_counts(path):
+    """Raw counts, feature names and barcodes only (skips X, layers, obsm, uns)."""
+    with h5py.File(path, "r") as f:
+        grp = f["raw"] if "raw" in f else f
+        X = read_elem(grp["X"])
+        var = read_elem(grp["var"]).index
+        obs = read_elem(f["obs"]).index
+    X = X.tocsc() if sp.issparse(X) else sp.csc_matrix(X)
+    return X, pd.Index(var), obs
+
+
+def sample_tables(path, species, host_ids, labels16, stype, lin):
+    t0 = time.time()
+    base = os.path.splitext(os.path.basename(path))[0]
+    cond = re.sub(r"-\d+_(pipseq|10x)$", "", base)
+    X, v, obs_names = read_counts(path)
+    is16 = v.str.startswith("16S_")
+    ishost = v.isin(host_ids) & ~is16
+    iswol = ~ishost & ~is16
+    lab = pd.Series([labels16.get(g, g) for g in v[is16]], index=v[is16])
+    wol16 = lab.str.contains("wolbachia", case=False).values
+    tot = np.asarray(X.sum(axis=1)).ravel()
+    c_host = np.asarray(X[:, np.where(ishost)[0]].sum(axis=1)).ravel()
+    c_wol = np.asarray(X[:, np.where(iswol)[0]].sum(axis=1)).ravel()
+    X16 = X[:, np.where(is16)[0]]
+    c16_wol = np.asarray(X16[:, np.where(wol16)[0]].sum(axis=1)).ravel() if wol16.any() else np.zeros(len(tot))
+    c16_oth = np.asarray(X16[:, np.where(~wol16)[0]].sum(axis=1)).ravel()
+    s16 = pd.Series(np.asarray(X16.sum(axis=0)).ravel(), index=v[is16])
+    s16 = s16[s16 > 0]
+    T = tot.sum()
+    row = dict(sample=base, condition=cond, species=species,
+               sample_type=stype.get(cond, "unknown"), lineage=lin.get(cond, "none"),
+               n_cells=len(obs_names), total_umis=int(T),
+               host_frac=c_host.sum() / T, wolbachia_gene_frac=c_wol.sum() / T,
+               wolbachia_16S_per_M=1e6 * c16_wol.sum() / T,
+               other_bacteria_16S_per_M=1e6 * c16_oth.sum() / T,
+               frac_cells_any_other_16S=float((c16_oth > 0).mean()),
+               frac_cells_any_wolbachia=float((c_wol > 0).mean()))
+    cells = pd.DataFrame({
+        "wolbachia_gene_frac": c_wol / np.maximum(tot, 1),
+        "wolbachia_umis": c_wol, "other_16S_umis": c16_oth, "wolbachia_16S_umis": c16_wol,
+        "total_umis": tot}, index=[f"{base}__{bc}" for bc in obs_names])
+    print(f"  {base}: {len(obs_names)} cells, {X.shape[1]} features; host {c_host.sum()/T:.1%}, "
+          f"Wolbachia genes {c_wol.sum()/T:.2%}, other-16S {1e6*c16_oth.sum()/T:.1f}/M "
+          f"({time.time() - t0:.0f} s)", flush=True)
+    return base, row, s16, cells
+
+
+def cache_paths(cache_dir, base):
+    return [os.path.join(cache_dir, f"{base}.{x}") for x in ("row.json", "16S.csv", "cells.csv.gz")]
+
+
+def write_cache(cache_dir, base, row, s16, cells):
+    os.makedirs(cache_dir, exist_ok=True)
+    pr, p16, pc = cache_paths(cache_dir, base)
+    s16.rename("umis").to_csv(p16)
+    cells.to_csv(pc)
+    with open(pr, "w") as fh:
+        json.dump({k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}, fh)
+
+
+def read_cache(cache_dir, base):
+    pr, p16, pc = cache_paths(cache_dir, base)
+    if not all(os.path.exists(x) for x in (pr, p16, pc)):
+        return None
+    with open(pr) as fh:
+        row = json.load(fh)
+    s16 = pd.read_csv(p16, index_col=0)["umis"] if os.path.getsize(p16) > 0 else pd.Series(dtype=float)
+    return base, row, s16, pd.read_csv(pc, index_col=0)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -99,51 +177,41 @@ def main():
                    help="TSV: condition<TAB>expected (infected/uninfected); overrides names")
     p.add_argument("--min_wolbachia_frac", type=float, default=1e-3,
                    help="sample-level Wolbachia gene UMI fraction called 'infected'")
+    p.add_argument("--cache_dir", default=None,
+                   help="per-sample tables; reused when present (written by --sample_only)")
+    p.add_argument("--sample_only", action="store_true",
+                   help="only compute the per-sample tables of --filtered into --cache_dir")
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
     out = args.out_dir
     os.makedirs(out, exist_ok=True)
 
-    host_ids = {"Dmel": gtf_gene_ids(args.host_gtf_dmel), "Dsim": gtf_gene_ids(args.host_gtf_dsim)}
+    t0 = time.time()
     stype = pd.read_csv(args.condition_sample_type, sep="\t", index_col=0).iloc[:, 0].to_dict()
     lin = pd.read_csv(args.lineages, sep="\t", index_col=0).iloc[:, 0].to_dict()
     labels16 = sixteen_s_labels(args.sixteen_s_gtf)
+    gtf = {"Dmel": args.host_gtf_dmel, "Dsim": args.host_gtf_dsim}
+    host_ids = {}
+    print(f"16S labels parsed ({time.time() - t0:.0f} s)", flush=True)
 
     rows, per16, cells = [], {}, []
     for path, species in zip(args.filtered, args.sample_species):
         base = os.path.splitext(os.path.basename(path))[0]
-        cond = re.sub(r"-\d+_(pipseq|10x)$", "", base)
-        a = ad.read_h5ad(path)
-        X = a.raw.X if a.raw is not None else a.X
-        X = X.tocsc() if sp.issparse(X) else sp.csc_matrix(X)
-        v = pd.Index(a.raw.var_names if a.raw is not None else a.var_names)
-        is16 = v.str.startswith("16S_")
-        ishost = v.isin(host_ids[species]) & ~is16
-        iswol = ~ishost & ~is16
-        lab = pd.Series([labels16.get(g, g) for g in v[is16]], index=v[is16])
-        wol16 = lab.str.contains("wolbachia", case=False).values
-        tot = np.asarray(X.sum(axis=1)).ravel()
-        c_host = np.asarray(X[:, ishost].sum(axis=1)).ravel()
-        c_wol = np.asarray(X[:, iswol].sum(axis=1)).ravel()
-        X16 = X[:, is16]
-        c16_wol = np.asarray(X16[:, wol16].sum(axis=1)).ravel() if wol16.any() else np.zeros(len(tot))
-        c16_oth = np.asarray(X16[:, ~wol16].sum(axis=1)).ravel()
-        per16[base] = pd.Series(np.asarray(X16.sum(axis=0)).ravel(), index=v[is16])
-        T = tot.sum()
-        rows.append(dict(sample=base, condition=cond, species=species,
-                         sample_type=stype.get(cond, "unknown"), lineage=lin.get(cond, "none"),
-                         n_cells=a.n_obs, total_umis=int(T),
-                         host_frac=c_host.sum() / T, wolbachia_gene_frac=c_wol.sum() / T,
-                         wolbachia_16S_per_M=1e6 * c16_wol.sum() / T,
-                         other_bacteria_16S_per_M=1e6 * c16_oth.sum() / T,
-                         frac_cells_any_other_16S=float((c16_oth > 0).mean()),
-                         frac_cells_any_wolbachia=float((c_wol > 0).mean())))
-        cells.append(pd.DataFrame({
-            "wolbachia_gene_frac": c_wol / np.maximum(tot, 1),
-            "wolbachia_umis": c_wol, "other_16S_umis": c16_oth, "wolbachia_16S_umis": c16_wol,
-            "total_umis": tot}, index=[f"{base}__{bc}" for bc in a.obs_names]))
-        print(f"  {base}: {a.n_obs} cells; host {c_host.sum()/T:.1%}, "
-              f"Wolbachia genes {c_wol.sum()/T:.2%}, other-16S {1e6*c16_oth.sum()/T:.1f}/M")
+        res = None if (args.sample_only or not args.cache_dir) else read_cache(args.cache_dir, base)
+        if res is None:
+            if species not in host_ids:
+                host_ids[species] = gtf_gene_ids(gtf[species])
+                print(f"{species} host GTF parsed ({time.time() - t0:.0f} s)", flush=True)
+            res = sample_tables(path, species, host_ids[species], labels16, stype, lin)
+            if args.cache_dir:
+                write_cache(args.cache_dir, *res)
+        else:
+            print(f"  {base}: from cache", flush=True)
+        _, row, s16, c = res
+        rows.append(row); per16[base] = s16; cells.append(c)
+    if args.sample_only:
+        print(f"Per-sample tables written ({time.time() - t0:.0f} s)")
+        return
 
     summ = pd.DataFrame(rows)
     summ["sample_type"] = pd.Categorical(summ["sample_type"], categories=STAGES + ["unknown"])
@@ -166,6 +234,7 @@ def main():
                pd.concat(per16, axis=1).index}, name="label").to_csv(
         os.path.join(out, "sixteenS_labels.csv"))
     m16 = pd.concat(per16, axis=1).fillna(0)
+    print(f"All samples loaded ({time.time() - t0:.0f} s)", flush=True)
     tot = summ.set_index("sample")["total_umis"]
     m16 = m16.div(tot[m16.columns], axis=1) * 1e6
     m16.index = [f"{labels16.get(g, g)} ({g})" for g in m16.index]

@@ -1521,9 +1521,44 @@ PT_INFECTION_PATH = "config/infection_status.tsv"
 _write_tsv_if_changed(pd.Series(config.get("infection_status", {}), name="expected",
                                 dtype=str).rename_axis("condition"), PT_INFECTION_PATH)
 
+# Per-sample Wolbachia / host / 16S counts (one job per library, run in
+# parallel); the gather rule below reads these tables instead of the h5ads.
+INF_CACHE = "results/pseudotime/infection/per_sample"
+
+rule pseudotime_infection_sample:
+    input:
+        h5ad = "results/filtered_h5ad/{s}.h5ad",
+        cst  = CONDITION_SAMPLE_TYPE_PATH,
+        lin  = PT_LINEAGES_PATH,
+    output:
+        multiext(INF_CACHE + "/{s}", ".row.json", ".16S.csv", ".cells.csv.gz"),
+    params:
+        script   = "snakemake_scripts/pseudotime/infection_by_stage.py",
+        cache    = INF_CACHE,
+        species  = lambda wc: _host_species(wc.s),
+        gtf_dmel = config["host_genome"]["Dmel"]["gtf"],
+        gtf_dsim = config["host_genome"]["Dsim"]["gtf"],
+        gtf_16s  = config.get("sixteen_s_gtf", ""),
+    log: "logs/pseudotime/infection_sample_{s}.log"
+    threads: 1
+    resources:
+        slurm_partition = config.get("pseudotime_partition", "medium"),
+        mem_mb          = 32000,
+        slurm_time      = "1:00:00",
+        runtime         = _hms_to_min("1:00:00")
+    shell:
+        "exec > {log} 2>&1" + PT_ACTIVATE + """
+        {SCANPY_ENV}/bin/python -u {params.script} --filtered {input.h5ad} \\
+            --sample_species {params.species} \\
+            --host_gtf_dmel {params.gtf_dmel} --host_gtf_dsim {params.gtf_dsim} \\
+            --sixteen_s_gtf {params.gtf_16s} \\
+            --condition_sample_type {input.cst} --lineages {input.lin} \\
+            --cache_dir {params.cache} --sample_only --out_dir results/pseudotime/infection
+        """
+
 rule pseudotime_infection:
     input:
-        files  = expand("results/filtered_h5ad/{s}.h5ad", s=PT_ALL_SAMPLES),
+        tables = expand(INF_CACHE + "/{s}.cells.csv.gz", s=PT_ALL_SAMPLES),
         states = rules.pseudotime_cell_states.output.states,
         cst    = CONDITION_SAMPLE_TYPE_PATH,
         lin    = PT_LINEAGES_PATH,
@@ -1532,6 +1567,8 @@ rule pseudotime_infection:
         flag = touch("results/pseudotime/infection/.done"),
     params:
         script   = "snakemake_scripts/pseudotime/infection_by_stage.py",
+        cache    = INF_CACHE,
+        files    = " ".join(f"results/filtered_h5ad/{s}.h5ad" for s in PT_ALL_SAMPLES),
         species  = " ".join(_host_species(s) for s in PT_ALL_SAMPLES),
         gtf_dmel = config["host_genome"]["Dmel"]["gtf"],
         gtf_dsim = config["host_genome"]["Dsim"]["gtf"],
@@ -1545,13 +1582,13 @@ rule pseudotime_infection:
         runtime         = _hms_to_min("12:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
-        {SCANPY_ENV}/bin/python {params.script} --filtered {input.files} \
-            --sample_species {params.species} \
-            --host_gtf_dmel {params.gtf_dmel} --host_gtf_dsim {params.gtf_dsim} \
-            --sixteen_s_gtf {params.gtf_16s} \
-            --condition_sample_type {input.cst} --lineages {input.lin} \
-            --states {input.states} --infection_status {input.status} \
-            --out_dir results/pseudotime/infection
+        {SCANPY_ENV}/bin/python -u {params.script} --filtered {params.files} \\
+            --sample_species {params.species} \\
+            --host_gtf_dmel {params.gtf_dmel} --host_gtf_dsim {params.gtf_dsim} \\
+            --sixteen_s_gtf {params.gtf_16s} \\
+            --condition_sample_type {input.cst} --lineages {input.lin} \\
+            --states {input.states} --infection_status {input.status} \\
+            --cache_dir {params.cache} --out_dir results/pseudotime/infection
         """
 
 # Infected line vs its uninfected parent line (infection_line_pairs), from the
