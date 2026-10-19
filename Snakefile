@@ -1580,9 +1580,9 @@ rule pseudotime_infection:
     threads: 2
     resources:
         slurm_partition = config.get("pseudotime_partition", "medium"),
-        mem_mb          = 64000,
-        slurm_time      = "2:00:00",
-        runtime         = _hms_to_min("2:00:00")
+        mem_mb          = 500000,
+        slurm_time      = "12:00:00",
+        runtime         = _hms_to_min("12:00:00")
     shell:
         "exec > {log} 2>&1" + PT_ACTIVATE + """
         {SCANPY_ENV}/bin/python -u {params.script} --filtered {params.files} \\
