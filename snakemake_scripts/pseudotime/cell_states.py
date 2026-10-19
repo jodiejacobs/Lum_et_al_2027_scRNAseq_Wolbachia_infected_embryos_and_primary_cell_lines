@@ -22,8 +22,10 @@ Part 2 -- are there cell-line precursors in the primary culture?
   * line_similarity = Pearson r(cell, cell-line centroid) - r(cell, primary
     centroid), on the trajectory's HVGs. > 0 means the cell is closer to the
     cell line than to its own culture's average.
-  * precursor candidates = primary cells with line_similarity > 0 (or, if
-    fewer than --min_candidates, the top --top_frac of primary cells).
+  * precursor candidates: with --candidate_rule top_frac, the top --top_frac
+    of primary cells by line_similarity (fixed size, comparable across runs);
+    with 'auto', primary cells with line_similarity > 0, or the top --top_frac
+    if fewer than --min_candidates.
   * Rank test (precursor_rank_test.csv/.pdf): Spearman rho between each
     candidate set's per-gene shift (vs. the rest of the primary culture) and
     the pseudobulk line-vs-primary log2FC, on non-HVG genes only (candidates
@@ -373,6 +375,7 @@ def main():
     p.add_argument("--state_min_z", type=float, default=0.5)
     p.add_argument("--flag_z", type=float, default=1.0)
     p.add_argument("--min_candidates", type=int, default=30)
+    p.add_argument("--candidate_rule", choices=["top_frac", "auto"], default="top_frac")
     p.add_argument("--top_frac", type=float, default=0.05)
     p.add_argument("--n_perm", type=int, default=200,
                    help="random primary-cell sets for the rank-test null")
@@ -440,7 +443,7 @@ def main():
         prim = obs[obs["sample_type"].astype(str) == "primary_cells"]
         cand = prim["line_similarity"] > 0
         rule = "line_similarity > 0"
-        if cand.sum() < args.min_candidates:
+        if args.candidate_rule == "top_frac" or cand.sum() < args.min_candidates:
             thr = prim["line_similarity"].quantile(1 - args.top_frac)
             cand = prim["line_similarity"] >= thr
             rule = f"top {args.top_frac:.0%} line_similarity (>= {thr:.3f})"

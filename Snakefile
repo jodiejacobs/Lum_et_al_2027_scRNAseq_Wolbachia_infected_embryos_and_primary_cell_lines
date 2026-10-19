@@ -1457,6 +1457,8 @@ rule pseudotime_cell_states:
         states = expand("results/pseudotime/cell_states/states_{group}.csv.gz", group=PT_GROUPS),
         flag   = touch("results/pseudotime/cell_states/.done"),
     params:
+        # precursor candidates: 'top_frac' (fixed top 5% of primary cells) or 'auto'
+        candidate_rule = config.get("precursor_candidate_rule", "top_frac"),
         script       = "snakemake_scripts/pseudotime/cell_states.py",
         markers_flag = (f"--markers_tsv {config['cell_state_markers']}"
                         if config.get("cell_state_markers") else ""),
@@ -1475,7 +1477,8 @@ rule pseudotime_cell_states:
         {SCANPY_ENV}/bin/python {params.script} --h5ads {input.h5ads} \
             --sceptic_obs {input.sceptic} --de_dir results/pseudotime/de {params.markers_flag} \
             --state_min_z {params.state_min_z} --flag_z {params.flag_z} \
-            --n_perm {params.n_perm} --out_dir results/pseudotime/cell_states
+            --n_perm {params.n_perm} --candidate_rule {params.candidate_rule} \
+            --out_dir results/pseudotime/cell_states
         """
 
 rule pseudotime_de_state:
@@ -1913,6 +1916,7 @@ rule pseudotime_wolbachia_states:
         downsample = config.get("wolbachia_states_downsample", 2000),
         wol_lfc    = config.get("wolbachia_states_wol_de_lfc", 1.0),
         min_cells  = config.get("wolbachia_states_min_cells", 50),
+        min_wol    = config.get("wolbachia_min_median_umis", 1),
     log: "logs/pseudotime/wolbachia_states.log"
     threads: 4
     resources:
@@ -1928,7 +1932,7 @@ rule pseudotime_wolbachia_states:
             --cell_states_dir results/pseudotime/cell_states --n_null {params.n_null} \\
             --div_z {params.div_z} --downsample {params.downsample} \\
             --wol_de_lfc {params.wol_lfc} --min_cells {params.min_cells} \\
-            --out_dir results/pseudotime/wolbachia_states
+            --min_wol {params.min_wol} --out_dir results/pseudotime/wolbachia_states
         """
 
 
@@ -1946,6 +1950,7 @@ rule pseudotime_culture_stress:
     params:
         script = "snakemake_scripts/pseudotime/culture_stress.py",
         groups = " ".join(PT_GROUPS),
+        min_wol = config.get("wolbachia_min_median_umis", 1),
     log: "logs/pseudotime/culture_stress.log"
     threads: 2
     resources:
@@ -1959,7 +1964,7 @@ rule pseudotime_culture_stress:
             --lineages {params.groups} --infection_dir results/pseudotime/infection \\
             --de_dir results/pseudotime/de \\
             --infection_de results/pseudotime/infection_de/de_Dsim6B-wMel_vs_Dsim6B.csv \\
-            --out_dir results/pseudotime/culture_stress
+            --min_wol {params.min_wol} --out_dir results/pseudotime/culture_stress
         """
 
 
@@ -1980,7 +1985,8 @@ rule pseudotime_rtk_switch:
     params:
         script  = "snakemake_scripts/pseudotime/rtk_switch.py",
         groups  = " ".join(PT_GROUPS),
-        min_wol = config.get("wolbachia_load_min_umis", 5),
+        # libraries enter within-sample Wolbachia tests if median Wolbachia UMIs >= this
+        min_wol = config.get("wolbachia_min_median_umis", 1),
     log: "logs/pseudotime/rtk_switch.log"
     threads: 2
     resources:
